@@ -1,0 +1,15 @@
+# Pinned for repro. CPU wheel works on laptop; same pins install CUDA build on Kaggle T4.
+# Python 3.13 compatible. wandb is optional and OFF by default (see configs).
+# torch is >=2.5 (not exact-pinned): Kaggle uses its preinstalled torch, never reinstall.
+# Laptop ran torch 2.9.0+cpu (2026-10-11); record Kaggle's version in decisions.md per run.
+torch>=2.5
+numpy==1.26.4
+tqdm==4.66.6
+pyyaml==6.0.2
+pytest==8.3.4
+fastapi==0.115.0
+uvicorn==0.30.6
+datasets==3.0.1
+regex==2024.11.6
+# Optional: uncomment to enable wandb logging
+# wandb==0.18.1

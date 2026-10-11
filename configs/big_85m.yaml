@@ -1,0 +1,53 @@
+# Larger 85M config. STUB ONLY — do not train until 30M results are verified (spec).
+project: minigpt-stack
+run_name: big_85m
+
+seed: 1337
+
+model:
+  vocab_size: 8192
+  n_layers: 12
+  d_model: 768
+  n_heads: 12
+  ffn_hidden: 1792
+  context_len: 512
+  norm: rmsnorm
+  pos: rope
+  mlp: swiglu
+  weight_tying: true
+  dropout: 0.0
+
+tokenizer:
+  vocab_size: 8192
+  special_tokens: ["<|endoftext|>", "<|pad|>"]
+
+train:
+  batch_tokens: 131072
+  micro_batch_seqs: 8
+  context_len: 512
+  max_steps: 150000
+  lr: 5.0e-4
+  min_lr_ratio: 0.1
+  warmup_steps: 2000
+  weight_decay: 0.1
+  grad_clip: 1.0
+  use_fp16: true
+  use_scaler: true
+  log_every: 50
+  val_every: 1000
+  sample_every: 2000
+  tokens_per_sample: 256
+
+checkpoint:
+  dir: checkpoints/big_85m
+  save_every: 1000
+  keep_last_n: 5
+
+data:
+  name: TinyStories
+  train_bins: data/tinystories_train_*.bin
+  val_bins: data/tinystories_val.bin
+
+logging:
+  use_wandb: false
+  project: minigpt-stack

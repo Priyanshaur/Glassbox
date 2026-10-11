@@ -1,0 +1,53 @@
+# Tiny CPU debug config. Must run on i3-1315U + 8GB in <60s for overfit test (Phase 2).
+project: minigpt-stack
+run_name: debug_cpu
+
+seed: 0
+
+model:
+  vocab_size: 512
+  n_layers: 2
+  d_model: 64
+  n_heads: 4
+  ffn_hidden: 128
+  context_len: 64
+  norm: rmsnorm
+  pos: rope
+  mlp: swiglu
+  weight_tying: true
+  dropout: 0.0
+
+tokenizer:
+  vocab_size: 512
+  special_tokens: ["<pad>", "<bos>", "<eos>", "<unk>"]
+
+train:
+  batch_tokens: 2048
+  micro_batch_seqs: 4
+  context_len: 64
+  max_steps: 200
+  lr: 1.0e-3
+  min_lr_ratio: 0.1
+  warmup_steps: 10
+  weight_decay: 0.0
+  grad_clip: 1.0
+  use_fp16: false            # CPU debug stays fp32 for determinism
+  use_scaler: false
+  log_every: 10
+  val_every: 50
+  sample_every: 50
+  tokens_per_sample: 64
+
+checkpoint:
+  dir: checkpoints/debug_cpu
+  save_every: 50
+  keep_last_n: 2
+
+data:
+  name: synthetic_debug
+  train_bins: data/debug_train.bin
+  val_bins: data/debug_val.bin
+
+logging:
+  use_wandb: false
+  project: minigpt-stack
