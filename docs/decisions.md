@@ -11,6 +11,33 @@
 - Checkpoint contract fixed now (before Phase 3 code): save model, optimizer, scaler, scheduler, RNG state, data position; resume must give continuous loss curve. Reason: user requirement ("save states") + Kaggle sessions die at any time; `save_every` default 1000 steps (~<1h on T4).
 - 85M config is a stub; gate: no 85M training until 30M val loss + coherent stories verified.
 
+## Phase 3 (2026-10-14)
+- Data position = integer step. Batches redrawn via SeedSequence([seed, step])
+  (never hash(): salted per process). Shards sampled weighted by size; every
+  window inside one shard (never spans). Tradeoff: sampling with replacement,
+  so epochs are statistical. Schedule is a pure function of step (no blob).
+- AdamW betas 0.9/0.95; decay on 2-D matrices except embedding; norms/emb exempt.
+- fp16+GradScaler on CUDA, fp32 CPU; overflow counted via scale drops (skips).
+  NaN/inf parks to ckpt_nan_* and exits 1; last good checkpoint untouched.
+- Metrics to stdout + metrics.jsonl; W&B lazy/optional. Time-based ckpts
+  (save_every_min) plus step-based; atomic tmp+rename; rotation keeps weights-only copies.
+- Sampler (train/sample.py, new file — time-lapse only): own Generator,
+  eval/no_grad, restores train mode.
+- HF backup lives ONLY in the notebook (huggingface_hub NOT added to
+  requirements; Kaggle installs it, skips gracefully without HF_TOKEN secret).
+- Notebook runs under Save Version with --max_hours 8; restores newest ckpt
+  from attached previous output; full prepare runs once, then shards attach.
+- Budget (PROVISIONAL until shakedown measures tok/s): ~490M train tokens
+  (user estimate; exact count lands in Kaggle prepare's meta.json — local
+  meta.json holds smoke counts only: 231,577 train / 37,743 val).
+  At a guessed 60k tok/s, 5.5h ~= 1.19B tokens ~= 2.4 passes ~= 18.1k steps
+  @65,536 tok/step -> max_steps=18000 in config. Calibration sets the final
+  number; gates: skips/step <1%, LR sweep {3e-4,6e-4,1e-3}x900 steps, micro
+  probe 8/16/32, kill-resume drill.
+- Bug caught by CPU smoke: logged loss divided by accum TWICE (9.02 showed as
+  1.13); gradients were correct (equivalence test passed), only the scalar
+  was wrong. Fixed; smoke now shows 9.02 -> decreasing, resume continues.
+
 ## Phase 2 (2026-10-11)
 - Versions actually used: torch 2.9.0+cpu, Python 3.13.2 (laptop). requirements.txt relaxed to torch>=2.5; Kaggle uses preinstalled torch, never reinstall.
 - Vocab reconciled to 8192 everywhere (was 8000 in configs; tokenizer makes 8192). Tokenizer blocks updated to <|endoftext|>/<|pad|>.
@@ -20,7 +47,11 @@
 - SDPA regimes: no cache is_causal=True; 1-token cached no mask; chunk+cache explicit float mask. Bool-mask convention avoided (ambiguous across builds).
 - Hook point: record/inject at output of block L (after both residual adds). Steering caveat: only tokens processed after the change are affected; cached K/V keep old values.
 - forward() returns GPTOutput(logits, new_kvs, recorded) always.
-- Exact counts (code, not arithmetic): debug 115,008; base_30m 31,465,984 (~31.5M); big_85m 84,167,424 (~84.2M).
+- Exact counts (code, not arithmetic): debug 606,528 (was 115,008 at vocab 512); base_30m 31,465,984 (~31.5M); big_85m 84,167,424 (~84.2M).
+- Debug vocab fix (2026-10-12): debug_cpu model.vocab_size was 512, so its
+  115,008 count proved nothing about real-vocab shapes. Now 8192 everywhere
+  (one debug config, no separate synthetic one); overfit test still uses
+  synthetic random ids, and Phase 3 adds a CPU smoke run on real shards.
 - Phase 2 draft bugs (caught before tests): _scale_residual_init written but never called (fixed: called in __init__); RMSNorm had a double-wrapped Parameter init line (cleaned to torch.ones(d)).
 - Phase 1 failures (kept here for honesty):
 - First prepare.py print used `≈` (U+2248); Windows cp1252 console crashed with UnicodeEncodeError. Fixed to ASCII `~=`.

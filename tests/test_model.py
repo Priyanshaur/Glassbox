@@ -15,10 +15,11 @@ def debug_cfg():
 
 def test_output_shapes():
     torch.manual_seed(0)
-    m = GPT(debug_cfg()).eval()
-    ids = torch.randint(0, 512, (2, 16))
+    c = debug_cfg()
+    m = GPT(c).eval()
+    ids = torch.randint(0, c["vocab_size"], (2, 16))
     out = m(ids)
-    assert out.logits.shape == (2, 16, 512)
+    assert out.logits.shape == (2, 16, c["vocab_size"])
     assert len(out.new_kvs) == 2
     k, v = out.new_kvs[0]
     assert k.shape == (2, 4, 16, 16) and v.shape == (2, 4, 16, 16)
@@ -36,10 +37,11 @@ def test_head_dim_even():
 def test_causal_mask_tight_allclose():
     """Changing future tokens never changes earlier logits (tight tol)."""
     torch.manual_seed(1)
-    m = GPT(debug_cfg()).eval()
-    ids = torch.randint(0, 512, (1, 16))
+    c = debug_cfg()
+    m = GPT(c).eval()
+    ids = torch.randint(0, c["vocab_size"], (1, 16))
     ids2 = ids.clone()
-    ids2[0, 12:] = torch.randint(0, 512, (4,))
+    ids2[0, 12:] = torch.randint(0, c["vocab_size"], (4,))
     with torch.no_grad():
         a = m(ids).logits
         b = m(ids2).logits
@@ -76,8 +78,9 @@ def test_sdpa_vs_manual_all_regimes():
 
 def test_model_sdpa_vs_manual_impl():
     torch.manual_seed(3)
-    m = GPT(debug_cfg()).eval()
-    ids = torch.randint(0, 512, (1, 12))
+    c = debug_cfg()
+    m = GPT(c).eval()
+    ids = torch.randint(0, c["vocab_size"], (1, 12))
     with torch.no_grad():
         a = m(ids, impl="sdpa").logits
         b = m(ids, impl="manual").logits
@@ -87,8 +90,9 @@ def test_model_sdpa_vs_manual_impl():
 def test_kv_cache_equivalence():
     """Full-sequence logits == incremental decode with past_kvs (amendment 4)."""
     torch.manual_seed(4)
-    m = GPT(debug_cfg()).eval()
-    ids = torch.randint(0, 512, (1, 12))
+    c = debug_cfg()
+    m = GPT(c).eval()
+    ids = torch.randint(0, c["vocab_size"], (1, 12))
     with torch.no_grad():
         full = m(ids).logits
         # Token-by-token.
@@ -132,8 +136,9 @@ def test_initial_loss_about_ln_vocab():
 
 def test_zero_inject_changes_nothing():
     torch.manual_seed(6)
-    m = GPT(debug_cfg()).eval()
-    ids = torch.randint(0, 512, (1, 10))
+    c = debug_cfg()
+    m = GPT(c).eval()
+    ids = torch.randint(0, c["vocab_size"], (1, 10))
     with torch.no_grad():
         a = m(ids).logits
         b = m(ids, inject={0: torch.zeros(64)}).logits
@@ -142,8 +147,9 @@ def test_zero_inject_changes_nothing():
 
 def test_record_layers_shapes():
     torch.manual_seed(7)
-    m = GPT(debug_cfg()).eval()
-    ids = torch.randint(0, 512, (2, 10))
+    c = debug_cfg()
+    m = GPT(c).eval()
+    ids = torch.randint(0, c["vocab_size"], (2, 10))
     with torch.no_grad():
         out = m(ids, record_layers=[0, 1])
     assert set(out.recorded) == {0, 1}

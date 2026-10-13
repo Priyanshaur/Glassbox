@@ -5,7 +5,7 @@ run_name: debug_cpu
 seed: 0
 
 model:
-  vocab_size: 512
+  vocab_size: 8192
   n_layers: 2
   d_model: 64
   n_heads: 4
@@ -18,8 +18,8 @@ model:
   dropout: 0.0
 
 tokenizer:
-  vocab_size: 512
-  special_tokens: ["<pad>", "<bos>", "<eos>", "<unk>"]
+  vocab_size: 8192
+  special_tokens: ["<|endoftext|>", "<|pad|>"]
 
 train:
   batch_tokens: 2048
@@ -35,16 +35,21 @@ train:
   use_scaler: false
   log_every: 10
   val_every: 50
+  val_windows: 8
   sample_every: 50
   tokens_per_sample: 64
 
 checkpoint:
   dir: checkpoints/debug_cpu
   save_every: 50
+  save_every_min: 0          # off for debug (step-based only)
+  max_hours: null
   keep_last_n: 2
 
 data:
   name: synthetic_debug
+  out_dir: data
+  tokenizer_path: tokenizer/tok8192.json
   train_bins: data/debug_train.bin
   val_bins: data/debug_val.bin
 
