@@ -1,0 +1,97 @@
+"""Instruct data without new special tokens: plain-text delimiters only.
+
+Fallback decision (see decisions.md): the instruct-dataset ID is unconfirmed,
+so prompts are synthesized deterministically from story text. Three content
+words sampled from a story become its constraint; the ORIGINAL story passes
+the criterion by construction, model generations may or may not.
+
+Prompt format (prompt and response tokenized SEPARATELY, then concatenated --
+never merged across the boundary, exactly what the sampler feeds at
+generation time):
+
+    Write a short story using all of these words: w1, w2, w3.
+
+    Story:<response><|endoftext|>
+"""
+import json
+import os
+import re
+
+import numpy as np
+import torch
+
+from tokenizer.bpe import EOT, EOT_ID
+
+TMPL = "Write a short story using all of these words: {words}.\n\nStory:"
+SALT = 12345
+
+
+def content_words(text):
+    """Lowercase alpha words len>=4, deduplicated. Deterministic order."""
+    return sorted({w for w in re.findall(r"[a-z]+", text.lower()) if len(w) >= 4})
+
+
+def synth_prompt(text, idx, n_words=3):
+    """(prompt, keywords) or None if the story has too few content words."""
+    words = content_words(text)
+    if len(words) < n_words:
+        return None
+    rng = np.random.default_rng(np.random.SeedSequence([SALT, idx]))
+    kw = sorted(rng.choice(words, size=n_words, replace=False).tolist())
+    return TMPL.format(words=", ".join(kw)), kw
+
+
+def check_criterion(response, keywords):
+    """Rule-based pass/fail. Deterministic; flaws documented in decisions.md."""
+    missing = [k for k in keywords if k not in response.lower()]
+    nwords = len(response.split())
+    ok = not missing and 10 <= nwords <= 500
+    return {"ok": ok, "missing": missing, "nwords": nwords}
+
+
+def build_sft_example(tok, prompt, response, context_len):
+    """input_ids + labels with -100 over prompt predictions.
+
+    full = P + R + [EOT]; labels[i] predicts full[i+1]. Prompt occupies
+    full[0..P-1], so labels[0..P-2] (== labels[:P-1]) are masked; labels[P-1]
+    predicts the first response token and is KEPT. Truncates to context_len.
+    """
+    p = tok.encode(prompt)
+    r = tok.encode(response)
+    full = p + r + [EOT_ID]
+    if len(full) > context_len:
+        full = full[:context_len - 1] + [EOT_ID]
+    P = min(len(p), len(full) - 1)
+    inp = torch.tensor(full[:-1], dtype=torch.long)
+    labels = torch.tensor(full[1:], dtype=torch.long)
+    labels[:P - 1] = -100
+    return inp, labels
+
+
+def docs_from_shard(tok, out_dir, split):
+    """Decode shard .bins to story texts (split on EOT). Deterministic order."""
+    with open(os.path.join(out_dir, "meta.json"), encoding="utf-8") as f:
+        meta = json.load(f)
+    texts = []
+    for rec in meta["shards"]:
+        if rec["split"] != split:
+            continue
+        with open(os.path.join(out_dir, rec["file"]), "rb") as f:
+            ids = np.frombuffer(f.read(), dtype=np.uint16).tolist()
+        for doc in tok.decode(ids).split(EOT):
+            doc = doc.strip()
+            if doc:
+                texts.append(doc)
+    return texts
+
+
+def collate(examples, pad_id):
+    """Right-pad (safe: causal positions never attend to trailing pads)."""
+    L = max(len(e[0]) for e in examples)
+    B = len(examples)
+    inp = torch.full((B, L), pad_id, dtype=torch.long)
+    lab = torch.full((B, L), -100, dtype=torch.long)
+    for i, (x, y) in enumerate(examples):
+        inp[i, :len(x)] = x
+        lab[i, :len(y)] = y
+    return inp, lab

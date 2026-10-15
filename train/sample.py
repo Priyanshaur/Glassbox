@@ -8,6 +8,17 @@ model's train mode is restored afterwards (amendment 5).
 """
 import torch
 
+from tokenizer.bpe import EOT, EOT_ID
+
+
+def prompt_ids(tok, prompt):
+    """Prompt encoding shared by SFT example building and generation.
+
+    SFT concatenates encode(prompt) + encode(response); the sampler feeds
+    encode(prompt) as the seed. Same ids both sides (tested in test_phase4).
+    """
+    return tok.encode(prompt)
+
 
 @torch.no_grad()
 def sample_continuations(model, tok, prompts, max_new=64, temperature=0.8,
@@ -29,4 +40,45 @@ def sample_continuations(model, tok, prompts, max_new=64, temperature=0.8,
             ids = torch.cat([ids, nxt], dim=1)
         outs.append(tok.decode(ids[0].tolist()))
     model.train(was_training)
+    return outs
+
+
+@torch.no_grad()
+def sample_completions(model, tok, prompt, n=4, max_new=64, temperature=0.8,
+                       top_k=50, seed=0, device=None):
+    """Batched KV-cache sampler: n completions of ONE prompt, one batch.
+
+    Same-length rows (identical prompt) so no padding is needed. Full forward
+    on the prompt, then single-token steps with past_kvs (exercises the Phase
+    2 cache path). Own Generator, eval/no_grad, restores train mode.
+    Returns RESPONSE texts (ASCII prompt prefix stripped, cut at EOT).
+    """
+    was_training = model.training
+    model.eval()
+    gen = torch.Generator().manual_seed(seed)
+    device = device or next(model.parameters()).device
+    ctx = model.cfg["context_len"]
+    base = torch.tensor([prompt_ids(tok, prompt)] * n, dtype=torch.long,
+                        device=device)
+    assert base.shape[1] + max_new <= ctx, "prompt + max_new exceeds context"
+    out = model(base)
+    past, ids = out.new_kvs, base
+    finished = torch.zeros(n, dtype=torch.bool, device=device)
+    for _ in range(max_new):
+        step = model(ids[:, -1:], past_kvs=past, pos_offset=ids.shape[1] - 1)
+        past = step.new_kvs
+        logits = step.logits[:, -1, :] / max(temperature, 1e-6)
+        if top_k is not None and top_k < logits.shape[-1]:
+            thr, _ = torch.topk(logits, top_k, dim=-1)
+            logits = logits.masked_fill(logits < thr[:, -1:], float("-inf"))
+        nxt = torch.multinomial(torch.softmax(logits, dim=-1), 1, generator=gen)
+        ids = torch.cat([ids, nxt], dim=1)
+        finished |= (nxt[:, 0] == EOT_ID)
+        if bool(finished.all()):
+            break
+    model.train(was_training)
+    outs = []
+    for row in ids.tolist():
+        # Prompt is pure ASCII -> strips cleanly off the decoded front.
+        outs.append(tok.decode(row)[len(prompt):].split(EOT)[0])
     return outs

@@ -11,6 +11,32 @@
 - Checkpoint contract fixed now (before Phase 3 code): save model, optimizer, scaler, scheduler, RNG state, data position; resume must give continuous loss curve. Reason: user requirement ("save states") + Kaggle sessions die at any time; `save_every` default 1000 steps (~<1h on T4).
 - 85M config is a stub; gate: no 85M training until 30M val loss + coherent stories verified.
 
+## Phase 4 (2026-10-16, CPU smoke only — no Kaggle launched)
+- Instruct fallback CONFIRMED (amendment 8): no dataset ID verified, so the
+  deterministic synthesized-prompt path is the implementation, not a backup:
+  3 content words per story (SeedSequence([12345, idx])), plain-text template,
+  zero new special tokens. Original stories pass by construction.
+- Masking: labels[:P-1] = -100 (prompt predictions out, first response kept);
+  right-padding is safe (causal positions never see trailing pads).
+- SFT: same Phase 3 checkpoint format (weights init, fresh optim); proposed
+  base LR 1e-4, sweep {5e-5, 1e-4, 2e-4} on Kaggle, 1-3 epochs, val on
+  response tokens (official validation split). Debug smoke used lr 3e-3.
+- Pairs: n=6 completions/prompt via batched KV-cache sampler (identical rows,
+  no padding needed), keep min(pass, fail) capped at 2, drop all-pass/all-fail
+  with survival stats. Eval: official val prompts, wins/ties/losses + Wilson
+  CI on decided pairs. Rule rate is circular (DPO trains to it) -> also val
+  ppl, distinct-2, mean length + blind 30-50 human protocol (docs + CSV emit).
+- DPO: hand loss, ref frozen (requires_grad_(False), never stepped/saved),
+  logs acc/margin/chosen-lp; proposed base lr 1e-6 sweep {5e-7,1e-6,2e-6},
+  beta 0.1, held-out early stopping. Debug smoke used lr 1e-4.
+- Criterion flaws (honest): rewards keyword-stuffing over story quality
+  (Goodhart: expect fluency to sag as win rate climbs — that is why ppl and
+  the human check exist), blind to grammar/plot, length-window bias.
+- Bugs caught: (1) test fed labels as model input (IndexError on -100);
+  (2) masking test overclaimed bit-identical loss (RoPE shifts positions —
+  claim corrected to response-only finiteness); (3) win_rate needed --max_new
+  + ctx clamping (debug ctx 64 overflows with 64 new tokens).
+
 ## Phase 3 (2026-10-14)
 - Data position = integer step. Batches redrawn via SeedSequence([seed, step])
   (never hash(): salted per process). Shards sampled weighted by size; every
