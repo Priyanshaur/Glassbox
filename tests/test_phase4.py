@@ -1,5 +1,6 @@
 """Phase 4 tests: boundaries, masking, pairing, DPO math, CPU smokes."""
 import math
+from unittest import mock
 
 import torch
 import torch.nn.functional as F
@@ -11,7 +12,7 @@ from tokenizer.bpe import BPETokenizer, EOT_ID
 from train.dpo import dpo_loss, response_logps
 from train.instruct import build_sft_example, check_criterion, collate, synth_prompt
 from train.pairs import make_pairs
-from train.sample import prompt_ids, sample_completions
+from train.sample import prompt_ids, sample_completions, sample_continuations
 from train.sft import build_examples
 
 TOK = None
@@ -97,6 +98,35 @@ def test_sampler_determinism():
     c = sample_completions(m, tok(), P, n=2, max_new=8, seed=12)
     assert a == b and len(a) == 2
     assert a != c  # different Generator stream draws differently
+
+
+def test_sampler_generator_matches_tensor_device():
+    """Regression: the generator must be built on the resolved device.
+
+    A CPU generator handed to torch.multinomial over CUDA probs raises
+    "Expected a 'cuda' device type for generator but found 'cpu'" - that
+    killed the main run at step 2000, because sample_every=2000 was never
+    reached during calibration. Here we spy on torch.multinomial and assert
+    generator.device tracks the model's device (cpu in CI, cuda on the box).
+    """
+    cfg = load_config("configs/debug_cpu.yaml")["model"]
+    torch.manual_seed(0)
+    m = GPT(cfg).eval()
+    model_dev = next(m.parameters()).device.type
+    seen = []
+    real = torch.multinomial
+
+    def spy(input, num_samples, *, generator=None, **kw):
+        assert generator is not None, "sampler must pass its own generator"
+        seen.append(generator.device.type)
+        return real(input, num_samples, generator=generator, **kw)
+
+    with mock.patch("torch.multinomial", spy):
+        sample_completions(m, tok(), P, n=2, max_new=4, seed=3)
+        sample_continuations(m, tok(), [P], max_new=4, seed=3)
+    assert seen, "spy never fired"
+    assert set(seen) == {model_dev}, (
+        f"generator device(s) {set(seen)} != model device {model_dev}")
 
 
 def test_sft_smoke_loss_falls():

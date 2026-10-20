@@ -25,8 +25,11 @@ def sample_continuations(model, tok, prompts, max_new=64, temperature=0.8,
                          top_k=50, seed=0, device=None):
     was_training = model.training
     model.eval()
-    gen = torch.Generator().manual_seed(seed)
+    # Resolve the device BEFORE building the generator: torch.multinomial
+    # rejects a CPU generator on a CUDA tensor ("Expected a 'cuda' device type
+    # for generator but found 'cpu'"). That crashed the main run at step 2000.
     device = device or next(model.parameters()).device
+    gen = torch.Generator(device=device).manual_seed(seed)
     outs = []
     for p in prompts:
         ids = torch.tensor([tok.encode(p)], dtype=torch.long, device=device)
@@ -55,8 +58,9 @@ def sample_completions(model, tok, prompt, n=4, max_new=64, temperature=0.8,
     """
     was_training = model.training
     model.eval()
-    gen = torch.Generator().manual_seed(seed)
+    # Device first, then the generator on that device (see sample_continuations).
     device = device or next(model.parameters()).device
+    gen = torch.Generator(device=device).manual_seed(seed)
     ctx = model.cfg["context_len"]
     base = torch.tensor([prompt_ids(tok, prompt)] * n, dtype=torch.long,
                         device=device)

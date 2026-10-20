@@ -217,19 +217,28 @@ def main():
                   f"skips={skip_count}", flush=True)
             if use_wandb:
                 wandb.log(rec, step=step)
-        if step % cfg["train"]["sample_every"] == 0 and step > 0:
-            outs = sample_continuations(model, tok, PROMPTS, max_new=64,
-                                        seed=seed + step, device=device)
-            with open(samples_path, "a", encoding="utf-8") as f:
-                f.write(f"--- step {step} ---\n")
-                for o in outs:
-                    f.write(o + "\n\n")
+        # Checkpoint BEFORE sampling. Sampling is optional garnish; a crash
+        # there must never cost us the step's save (at step 2000 it cost us
+        # both the save and the rest of the session).
         if step % save_every == 0 and step > 0:
             save(step)
             last_ckpt_t = time.time()
         elif save_min and (time.time() - last_ckpt_t) > save_min * 60:
             save(step)
             last_ckpt_t = time.time()
+        if step % cfg["train"]["sample_every"] == 0 and step > 0:
+            try:
+                outs = sample_continuations(model, tok, PROMPTS, max_new=64,
+                                            seed=seed + step, device=device)
+            except Exception as e:
+                print(f"[pretrain] WARNING: sampling failed at step {step}: "
+                      f"{type(e).__name__}: {e}. training continues.",
+                      flush=True)
+            else:
+                with open(samples_path, "a", encoding="utf-8") as f:
+                    f.write(f"--- step {step} ---\n")
+                    for o in outs:
+                        f.write(o + "\n\n")
 
     save(max_steps)
     metrics_f.close()
