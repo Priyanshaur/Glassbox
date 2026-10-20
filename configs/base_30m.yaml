@@ -28,7 +28,7 @@ train:
   max_steps: 18000           # PROVISIONAL: ~1.18B tokens @65k/step; reset after calibration measures tok/s
   lr: 6.0e-4
   min_lr_ratio: 0.1
-  warmup_steps: 2000
+  warmup_steps: 500         # was 2000 (~1/5 of run); lowered post-calibration per decision
   weight_decay: 0.1
   grad_clip: 1.0
   use_fp16: true             # T4 handles bf16 poorly -> fp16 + GradScaler
