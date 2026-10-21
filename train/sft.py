@@ -115,7 +115,7 @@ def main():
     ap.add_argument("--lr", type=float, default=1e-4)
     ap.add_argument("--epochs", type=int, default=2)
     ap.add_argument("--batch_seqs", type=int, default=8)
-    ap.add_argument("--max_examples", type=int, default=50000,
+    ap.add_argument("--max_examples", type=int, default=20000,
                     help="cap on examples per split; 0 = no cap")
     ap.add_argument("--save_every", type=int, default=0,
                     help="also save every N steps; 0 = time-based only")
