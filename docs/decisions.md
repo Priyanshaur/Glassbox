@@ -11,6 +11,33 @@
 - Checkpoint contract fixed now (before Phase 3 code): save model, optimizer, scaler, scheduler, RNG state, data position; resume must give continuous loss curve. Reason: user requirement ("save states") + Kaggle sessions die at any time; `save_every` default 1000 steps (~<1h on T4).
 - 85M config is a stub; gate: no 85M training until 30M val loss + coherent stories verified.
 
+## Phase 3 calibration (2026-10-19, `priyanshgaur/glassbox-calibrate`)
+- 22 tests passed in 12.2s before any GPU was spent.
+- micro-batch probe, all three `skip_rate_post30 = 0.0000`:
+  `mb=8  tok/s= 9,668 peak_mem=11,997MB`, `mb=16 tok/s=38,709 peak_mem=13,131MB`,
+  `mb=32 tok/s=40,245 peak_mem= 8,315MB`. Picked `PROBE_TOKS = 40,245` (best
+  passing). Honest flaw: the mb=8 number is a COLD-RAMP artifact — that probe
+  run had only reached 15,276 tok/s by step 100 while the other two were already
+  at ~42-43k, so the ranking is distorted and peak_mem is non-monotonic (mb=32
+  lower than mb=16). It did not hurt: production kept the conservative
+  `micro_batch_seqs: 8` (accum = 128 seqs / 8 = 16) and measured
+  **~39,600 tok/s steady = 98.4% of the probe**, so the budget was right anyway.
+- Budget: `tok/s=40245 target=5.5h -> budget=0.80B tokens`;
+  `passes over train data ~= 1.71 -> MAX_STEPS=12158`. Check: 5.5h x 3600 x
+  40,245 = 796,851,000 tokens; 796,851,000 // 65,536 = **12,158** exactly.
+- Kill-resume drill (`warmup_steps 2000->30`): run 1 stopped early and saved
+  `/tmp/drill/ckpt_step135.pt`; run 2 resumed `latest` and reached
+  `ckpt_step300.pt`. The resume contract was verified on GPU before the real run.
+- LR sweep, 900 steps each, `warmup_steps 2000->60`, `val_every 1000->150`, val
+  compared at the SAME step 750 for all three:
+  `lr=3e-4 val=2.0146`, `lr=6e-4 val=1.8463`, `lr=1e-3 val=1.7651`.
+  Logged `PROPOSED_LR = 1e-3`; set as `CONFIRMED_LR = 1e-3` in the main cell and
+  confirmed in every session log (`LR: 0.001`).
+- warmup 2000 -> 500 (`configs/base_30m.yaml`, commit `54ea0fa`): at the
+  calibrated 12,158 steps, 2000 warmup is 16.4% of the whole run spent ramping;
+  500 is 4.1%. Note the sweep's own runs used 60 purely to reach peak inside
+  900 steps — that is a test harness value, NOT the production warmup.
+
 ## Phase 3 main run — Kaggle sessions 1-3 (2026-10-20/21)
 - RESULT: `max_steps 12158` reached, natural exit (line 243 `save(max_steps)` ->
   `return 0`; the `max_hours` branch never fired). **12,157 / 12,158 iterations
