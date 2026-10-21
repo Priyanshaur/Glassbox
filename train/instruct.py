@@ -20,7 +20,7 @@ import re
 import numpy as np
 import torch
 
-from tokenizer.bpe import EOT, EOT_ID
+from tokenizer.bpe import EOT_ID
 
 TMPL = "Write a short story using all of these words: {words}.\n\nStory:"
 SALT = 12345
@@ -68,21 +68,38 @@ def build_sft_example(tok, prompt, response, context_len):
     return inp, labels
 
 
-def docs_from_shard(tok, out_dir, split):
-    """Decode shard .bins to story texts (split on EOT). Deterministic order."""
+def iter_shard_texts(tok, out_dir, split):
+    """Yield a split's story texts ONE story at a time (streaming, not a list).
+
+    Reads the shard as a uint16 array (~128 MB per 67M-token shard) and decodes
+    story by story, cutting only at EOT ids so a story can never be split
+    across a decode call. docs_from_shard used to .tolist() the whole file and
+    decode it in one pass, which builds a multi-GB Python list on the real
+    corpus; here memory tracks the array, and a caller that stops early (the
+    --max_examples cap in train/sft.py) never pays for the rest of the split.
+    Same texts, same order, and the trailing story still comes out even if a
+    shard has no EOT after it.
+    """
     with open(os.path.join(out_dir, "meta.json"), encoding="utf-8") as f:
         meta = json.load(f)
-    texts = []
     for rec in meta["shards"]:
         if rec["split"] != split:
             continue
-        with open(os.path.join(out_dir, rec["file"]), "rb") as f:
-            ids = np.frombuffer(f.read(), dtype=np.uint16).tolist()
-        for doc in tok.decode(ids).split(EOT):
-            doc = doc.strip()
-            if doc:
-                texts.append(doc)
-    return texts
+        ids = np.fromfile(os.path.join(out_dir, rec["file"]), dtype=np.uint16)
+        prev = -1
+        for e in np.flatnonzero(ids == EOT_ID):
+            text = tok.decode(ids[prev + 1:e].tolist()).strip()
+            prev = int(e)
+            if text:
+                yield text
+        tail = tok.decode(ids[prev + 1:].tolist()).strip()
+        if tail:
+            yield tail
+
+
+def docs_from_shard(tok, out_dir, split):
+    """Decode shard .bins to story texts (split on EOT). Deterministic order."""
+    return list(iter_shard_texts(tok, out_dir, split))
 
 
 def collate(examples, pad_id):

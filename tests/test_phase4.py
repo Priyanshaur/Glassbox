@@ -203,3 +203,60 @@ def test_synth_prompt_deterministic():
     b = synth_prompt(texts[0], 0)
     assert a == b and len(a[1]) == 3
     assert all(k in texts[0].lower() for k in a[1])  # keywords from the story
+
+
+def test_sft_resume_already_complete_is_noop(tmp_path, monkeypatch):
+    """Re-launching a finished SFT run must be a clean no-op.
+
+    Every Kaggle session begins with --resume latest, so a restart after the
+    final update completed has to exit 0 without re-running a step, rewriting
+    a checkpoint, or appending metrics -- otherwise a re-launch could silently
+    clobber the finished weights.
+    """
+    import hashlib
+    import sys
+
+    from train import checkpoint as ckpt_mod
+    from train.optim import build_param_groups
+    from train.sft import main as sft_main
+
+    cfg = load_config("configs/debug_cpu.yaml")
+    mcfg = cfg["model"]
+    torch.manual_seed(0)
+    wpath = tmp_path / "weights.pt"
+    torch.save(GPT(mcfg).state_dict(), wpath)
+
+    ckdir = tmp_path / "ck"
+    ckdir.mkdir()
+    model = GPT(mcfg)
+    # Must mirror main()'s optimizer exactly: load_checkpoint restores the
+    # state dict and AdamW rejects a different number of param groups.
+    opt = torch.optim.AdamW(
+        build_param_groups(model, cfg["train"]["weight_decay"]),
+        lr=1e-4, betas=(0.9, 0.95))
+    scaler = torch.amp.GradScaler("cpu", enabled=False)
+    # 8 examples // 4 batch_seqs = 2 steps/epoch, 2 epochs -> max_steps 4.
+    # A checkpoint tagged 3 therefore means "done" (load returns next = 4).
+    ckpt_mod.save_checkpoint(
+        str(ckdir), model, opt, scaler, 3, {"model": mcfg, "seed": 0},
+        ckpt_mod.file_hash("tokenizer/tok8192.json"), 2)
+
+    def digest(path):
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    before = {p.name: digest(p) for p in sorted(ckdir.glob("*.pt"))}
+    assert before, "checkpoint fixture was not written"
+
+    monkeypatch.setattr(sys, "argv", [
+        "sft", "--config", "configs/debug_cpu.yaml",
+        "--init_weights", str(wpath), "--ckpt_dir", str(ckdir),
+        "--max_examples", "8", "--epochs", "2", "--batch_seqs", "4",
+        "--save_every_min", "999", "--resume", "latest"])
+
+    assert sft_main() == 0
+
+    after = {p.name: digest(p) for p in sorted(ckdir.glob("*.pt"))}
+    assert after == before, "already-complete resume rewrote a checkpoint"
+    assert not (ckdir / "metrics_sft.jsonl").exists(), \
+        "already-complete resume appended metrics"
+
