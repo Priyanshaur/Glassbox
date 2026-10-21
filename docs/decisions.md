@@ -11,6 +11,43 @@
 - Checkpoint contract fixed now (before Phase 3 code): save model, optimizer, scaler, scheduler, RNG state, data position; resume must give continuous loss curve. Reason: user requirement ("save states") + Kaggle sessions die at any time; `save_every` default 1000 steps (~<1h on T4).
 - 85M config is a stub; gate: no 85M training until 30M val loss + coherent stories verified.
 
+## Phase 3 main run — Kaggle sessions 1-3 (2026-10-20/21)
+- RESULT: `max_steps 12158` reached, natural exit (line 243 `save(max_steps)` ->
+  `return 0`; the `max_hours` branch never fired). **12,157 / 12,158 iterations
+  trained**, val **1.294 @ 12000**, **~8.8 GPU h** (`time_used` 31,637.725 s =
+  8h47m18s; s1 ~10,932 s + s2 ~9,834 s + s3 ~10,872 s). Val monotonic across
+  all three sessions: 1.589@2000, 1.514, 1.461, 1.422, 1.396@6000, 1.369@7000,
+  1.347, 1.327, 1.310, 1.299, **1.294@12000**. Never tripped any spike rule;
+  skips 0 for the whole run.
+- Off-by-one (the entire 12,158 -> 12,157 gap): `pretrain.py:157` runs
+  `save(step)` at the TOP of the loop body, before that iteration trains, so
+  `ckpt_step6207.pt` holds the state after step 6206; `load_checkpoint` returns
+  `step+1`, resume restarts at 6208, and **step 6207 is never trained**. Cause
+  is a tagging inconsistency, not the save itself: the periodic path (`:223`)
+  saves AFTER training and tags "last step trained", while both exit paths tag
+  "last step trained + 1". Line 243's `save(max_steps)` is harmless today —
+  `range` stops at `max_steps-1`, so step 12158 does not exist (observed firing
+  on the s3 natural exit) — but WOULD silently skip an iteration if `max_steps`
+  were ever raised on a resumed run. NOT fixed: sessions 1-3 all ran off one
+  commit and retagging breaks resume for checkpoints already on disk. Fix when
+  convenient: tag `step-1` on the `max_hours` path.
+- Sampler device bug + `check=False` swallow: session 1 died at step 2000 with
+  `RuntimeError: Expected a 'cuda' device type for generator but found 'cpu'`
+  (`train/sample.py:39`) — `torch.Generator()` defaults to CPU, then
+  `torch.multinomial` was called on a CUDA tensor. Worse, the notebook's
+  subprocess call used `check=False`, so the non-zero exit was **swallowed and
+  the run still reported COMPLETE**, hiding the crash. Because sampling also ran
+  BEFORE the step-2000 save, nothing at 2000 was written — no checkpoint and no
+  `samples.txt` block — so session 2 had to rewind to `ckpt_step1662` and
+  retrain 1663-1999. Fixed in `7d40bf3`: generator built device-first
+  (`torch.Generator(device=device)`, both samplers), save-then-sample in
+  `pretrain.py`, cell 18 now raises on non-zero exit.
+- Quota `timedelta` misread: the Kaggle API's `to_json()` serializes a
+  `timedelta` as a malformed string (`"20765.942.0s"` — seconds and
+  microseconds concatenated), so parsing it yields garbage. Read the typed
+  `gpu_quota.time_used` / `total_time_allowed` fields as `datetime.timedelta`
+  (authoritative) and `quotaRefreshTime` for the reset; never the JSON string.
+
 ## Phase 4 (2026-10-16, CPU smoke only — no Kaggle launched)
 - Instruct fallback CONFIRMED (amendment 8): no dataset ID verified, so the
   deterministic synthesized-prompt path is the implementation, not a backup:
