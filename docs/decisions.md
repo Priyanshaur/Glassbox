@@ -113,6 +113,18 @@
   coverage. A pretrain-weights TEMPLATE baseline (local CPU, same prompts +
   seeds, new file next to stories_256.txt) is part of the recheck; no
   adherence claim is made until it lands.
+- Recheck outcome (2026-10-22): strict whole-word / story-prose / pre-first-EOT
+  counting gives keyword coverage 0/5 pretrain vs 0/5 SFT (1 stray
+  single-word hit baseline vs 4 SFT). Qualitative change confirmed though:
+  all 5 SFT outputs are complete stories ending at their EOT, while the
+  pretrain model reads the TEMPLATE prompt as story text and wanders into
+  invented dialogue; 4/5 SFT stories share a stock opener ("Once upon a
+  time, there was a little ...", two with verbatim "little girl named
+  Lily"). Next gate before any DPO pair building: n=6-per-prompt keyword
+  coverage probe on the first 200 template prompts (exact corpus head,
+  reconstructed locally from the fixture shard when its first 5 prompts
+  matched PROMPTS_T 5/5), measured by the same strict rule; pair building
+  happens only if that probe shows viable coverage.
 
 ## Phase 3 (2026-10-14)
 - Data position = integer step. Batches redrawn via SeedSequence([seed, step])
