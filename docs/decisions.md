@@ -100,6 +100,19 @@
   (2) masking test overclaimed bit-identical loss (RoPE shifts positions —
   claim corrected to response-only finiteness); (3) win_rate needed --max_new
   + ctx clamping (debug ctx 64 overflows with 64 new tokens).
+- SFT final (v5 retry, 2026-10-21): on a flat val curve (64 val examples ->
+  <0.01 noise floor), best-val selection is noise-level; the final
+  checkpoint is used. Selection code still copies best-logged-val's nearest
+  save for auditability, but flat curves make it equivalent to last.
+- SFT final run (v7, 2026-10-22): samples show EOT in 8/10 sections (3/5
+  openers, 5/5 TEMPLATE), each at a complete story end. TEMPLATE keyword
+  adherence is UNDER RECHECK: the first assessment was an artifact —
+  sample_continuations decodes the prompt itself (ids start with
+  encode(prompt)), so keyword "hits" landed in the echoed prompt prefix;
+  strict whole-word matching on pre-EOT story text alone finds 0/5 full
+  coverage. A pretrain-weights TEMPLATE baseline (local CPU, same prompts +
+  seeds, new file next to stories_256.txt) is part of the recheck; no
+  adherence claim is made until it lands.
 
 ## Phase 3 (2026-10-14)
 - Data position = integer step. Batches redrawn via SeedSequence([seed, step])
