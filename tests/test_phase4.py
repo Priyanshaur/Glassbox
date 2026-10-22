@@ -11,7 +11,7 @@ from model.gpt import GPT
 from tokenizer.bpe import BPETokenizer, EOT_ID
 from train.dpo import dpo_loss, response_logps
 from train.instruct import build_sft_example, check_criterion, collate, synth_prompt
-from train.pairs import make_pairs
+from train.pairs import make_pairs, whole_word_ok
 from train.sample import prompt_ids, sample_completions, sample_continuations
 from train.sft import build_examples
 
@@ -67,6 +67,23 @@ def test_criterion_basics():
     assert check_criterion(W, kw)["ok"]
     assert not check_criterion(L, kw)["ok"]
     assert check_criterion(L, kw)["missing"] == kw
+
+
+def test_whole_word_ok_excludes_substrings():
+    """Whole-word gate (2026-10-22): hits inside other words must not count.
+
+    Substring matching would accept 'tree' inside 'street' and 'when' inside
+    'whenever'; the pair gate switched to whole-word matching for that.
+    """
+    assert not whole_word_ok("Sam ran down the street.", ["tree"])
+    assert not whole_word_ok("He comes here whenever he can.", ["when"])
+    assert whole_word_ok("A tall tree grew up fast here in the sunny garden.",
+                         ["tree"])
+    assert whole_word_ok("When he ran through the park he fell down on grass.",
+                         ["when"])
+    assert whole_word_ok("The TREE in my yard was very tall and green.",
+                         ["tree"])  # case-insensitive
+    assert not whole_word_ok("Tree. " * 9, ["tree"])  # 9 words < window
 
 
 def test_ties_excluded():

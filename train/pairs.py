@@ -2,17 +2,39 @@
 
 Per prompt (deterministic completion seeds from SeedSequence([salt, idx])):
 sample n completions from the SFT model, score each with the rule criterion.
-Keep min(#pass, #fail) pairs (zipped, winners/losers shuffled deterministically).
+Keep min(#pass, #fail) pairs (zipped in completion order -- the sampler's
+own order, no re-shuffle; the pair list order is deterministic here).
 Drop all-pass and all-fail prompts (ties carry no DPO signal) and REPORT the
 survival counts -- a collapsed survival rate means the criterion or the
 model, not DPO, needs fixing.
 """
 import numpy as np
+import re
 
-from train.instruct import check_criterion
 from train.sample import sample_completions
 
 SALT = 777
+
+
+def whole_word_ok(response, keywords):
+    """Whole-word constraint check (gate 2026-10-22, see decisions.md).
+
+    Every keyword must appear as a standalone word (case-insensitive), plus
+    the same 10-500-word window as check_criterion. Substring matching counts
+    keywords inside other words ('when' in 'whenever', 'tree' in 'street'),
+    which the probe showed inflates pass verdicts; the probe switched the
+    pair gate to whole-word matching. (check_criterion stays untouched: it
+    remains the documented substring reference for criterion-flaw notes.)
+
+    NOTE: the graded rule (decision 2026-10-22) pairs by keyword-count
+    margins, not by this boolean; this helper stays the whole-word building
+    block for count scoring in build_pairs.
+    """
+    low = response.lower()
+    for k in keywords:
+        if not re.search(r"(?<!\w)" + re.escape(k.lower()) + r"(?!\w)", low):
+            return False
+    return 10 <= len(response.split()) <= 500
 
 
 def make_pairs(prompt, scored, max_pairs=2):
@@ -39,7 +61,7 @@ def build_pairs(model, tok, prompts, n=6, max_new=64, temperature=0.8,
                                    seed=int(np.random.SeedSequence(
                                        [seed, SALT, i]).generate_state(1)[0]),
                                    device=device)
-        scored = [(t, check_criterion(t, kw)["ok"]) for t in texts]
+        scored = [(t, whole_word_ok(t, kw)) for t in texts]
         made, keep = make_pairs(prompt, scored, max_pairs)
         pairs.extend(made)
         kept += keep
