@@ -5,6 +5,7 @@ __pycache__/
 checkpoints/
 data/*.bin
 data/meta.json
+data/full/
 .kaggle/
 kaggle.json
 *.egg-info/

@@ -97,6 +97,49 @@ def test_ties_excluded():
     assert make_pairs(P, [(s, False) for s, _ in scored_mixed]) == ([], False)
 
 
+def test_make_graded_pairs_margins():
+    """Graded criterion (2026-10-22): margin >= 1 more keyword than rejected,
+    both rows EOT-ended and 10-500 words; exact max-cardinality/max-margin
+    matching, edges ordered margin-desc.
+    """
+    from train.pairs import make_graded_pairs
+    # winners {3,3}, losers {1,0} -> two pairs, margins 3 and 2
+    rows = [{"text": f"winner-3a number {i}", "cov": 3, "eot": True,
+             "nwords": 20} for i in range(2)] + \
+           [{"text": "loser-1 only dragon", "cov": 1, "eot": True,
+             "nwords": 15},
+            {"text": "loser-0 nothing", "cov": 0, "eot": True, "nwords": 12}]
+    pairs, keep = make_graded_pairs("P", rows, max_pairs=2)
+    assert keep and len(pairs) == 2
+    assert [p["margin"] for p in pairs] == [3, 2]
+    # losers are never winners here; distinct rows
+    assert len({p["winner"] for p in pairs}) == 2
+    assert len({p["loser"] for p in pairs}) == 2
+    # an EOT-less row is ineligible even at high coverage
+    rows2 = rows + [{"text": "high cov but no eot dragon castle brave",
+                     "cov": 2, "eot": False, "nwords": 12}]
+    pairs2, keep2 = make_graded_pairs("P", rows2, max_pairs=2)
+    assert keep2 and all("no eot" not in p["winner"] and
+                         "no eot" not in p["loser"] for p in pairs2)
+    assert [p["margin"] for p in pairs2] == [3, 2]
+    # all-tied (no margin anywhere) drops the prompt
+    tie = [{"text": f"same cov {i}", "cov": 1, "eot": True, "nwords": 15}
+           for i in range(3)]
+    assert make_graded_pairs("P", tie, max_pairs=2) == ([], False)
+
+
+def test_sample_completions_return_flags_parity():
+    """return_flags=True must not change sampling: same texts, same seed."""
+    cfg = load_config("configs/debug_cpu.yaml")
+    tok = BPETokenizer.load(cfg["data"]["tokenizer_path"])
+    m = GPT(cfg["model"]).eval()
+    a = sample_completions(m, tok, P, n=2, max_new=8, seed=0)
+    b, flags = sample_completions(m, tok, P, n=2, max_new=8, seed=0,
+                                  return_flags=True)
+    assert a == b
+    assert len(flags) == 2 and isinstance(flags[0]["eot_hit"], bool)
+
+
 def test_dpo_loss_ln2_at_reference():
     """Policy == reference -> margins 0 -> loss ln2 for any beta."""
     for beta in (0.05, 0.1, 0.5):

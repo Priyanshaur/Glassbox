@@ -48,13 +48,17 @@ def sample_continuations(model, tok, prompts, max_new=64, temperature=0.8,
 
 @torch.no_grad()
 def sample_completions(model, tok, prompt, n=4, max_new=64, temperature=0.8,
-                       top_k=50, seed=0, device=None):
+                       top_k=50, seed=0, device=None, return_flags=False):
     """Batched KV-cache sampler: n completions of ONE prompt, one batch.
 
     Same-length rows (identical prompt) so no padding is needed. Full forward
     on the prompt, then single-token steps with past_kvs (exercises the Phase
     2 cache path). Own Generator, eval/no_grad, restores train mode.
     Returns RESPONSE texts (ASCII prompt prefix stripped, cut at EOT).
+    With return_flags=True returns (texts, flags) where each flags row
+    carries {'eot_hit': bool} — the flag is collected from the finished
+    mask that already existed in the loop, so RNG consumption is identical
+    either way (parity-tested).
     """
     was_training = model.training
     model.eval()
@@ -85,4 +89,6 @@ def sample_completions(model, tok, prompt, n=4, max_new=64, temperature=0.8,
     for row in ids.tolist():
         # Prompt is pure ASCII -> strips cleanly off the decoded front.
         outs.append(tok.decode(row)[len(prompt):].split(EOT)[0])
+    if return_flags:
+        return outs, [{"eot_hit": bool(f)} for f in finished.tolist()]
     return outs
