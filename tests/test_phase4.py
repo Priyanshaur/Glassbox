@@ -140,6 +140,29 @@ def test_sample_completions_return_flags_parity():
     assert len(flags) == 2 and isinstance(flags[0]["eot_hit"], bool)
 
 
+def test_split_holdout_is_by_prompt():
+    """dpo holdout must be disjoint by PROMPT (fix 2026-10-22)."""
+    from train.dpo import split_holdout
+    pairs = []
+    for i in range(10):
+        pairs.append({"prompt": f"prompt-{i}", "winner": f"w{i}", "loser": f"l{i}"})
+        if i % 2 == 0:  # even-index prompts carry a SECOND pair
+            pairs.append({"prompt": f"prompt-{i}", "winner": f"w{i}b",
+                          "loser": f"l{i}b"})
+    train, hold = split_holdout(pairs, heldout_frac=0.25, seed=0)
+    tp = {p["prompt"] for p in train}
+    hp = {p["prompt"] for p in hold}
+    assert not (tp & hp), "a prompt leaked across the split"
+    assert hp  # non-empty holdout
+    # every 2-pair prompt lives entirely on one side
+    for i in range(0, 10, 2):
+        mine = [p for p in pairs if p["prompt"] == f"prompt-{i}"]
+        side_hp = sum(1 for p in mine if p["prompt"] in hp)
+        assert side_hp in (0, len(mine))
+    # all 15 pairs accounted for
+    assert len(train) + len(hold) == len(pairs)
+
+
 def test_dpo_loss_ln2_at_reference():
     """Policy == reference -> margins 0 -> loss ln2 for any beta."""
     for beta in (0.05, 0.1, 0.5):

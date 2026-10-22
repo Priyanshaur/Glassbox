@@ -44,6 +44,24 @@ def dpo_loss(lp_w, lp_l, lr_w, lr_l, beta=0.1):
     return -F.logsigmoid(beta * margin), margin
 
 
+def split_holdout(pairs, heldout_frac, seed=0):
+    """Hold out BY PROMPT, not by pair (fix 2026-10-22).
+
+    The old split permuted the pair list, so one prompt's pair 1 could sit
+    in train while its pair 2 was held out -- prompt leakage across the
+    split. Deterministic: prompt permutation via SeedSequence([seed, 1]).
+    Returns (train_pairs, hold_pairs) with disjoint prompt sets.
+    """
+    prompts = sorted({p["prompt"] for p in pairs})
+    rng = np.random.default_rng(np.random.SeedSequence([seed, 1]))
+    order = rng.permutation(len(prompts))
+    n_hold = max(int(len(prompts) * heldout_frac), 1)
+    hold_prompts = {prompts[i] for i in order[:n_hold]}
+    hold = [p for p in pairs if p["prompt"] in hold_prompts]
+    train = [p for p in pairs if p["prompt"] not in hold_prompts]
+    return train, hold
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", required=True)
@@ -68,12 +86,11 @@ def main():
 
     with open(args.pairs, encoding="utf-8") as f:
         all_pairs = [json.loads(l) for l in f]
-    rng = np.random.default_rng(np.random.SeedSequence([args.seed, 1]))
-    order = rng.permutation(len(all_pairs))
-    n_hold = max(int(len(all_pairs) * args.heldout_frac), 1)
-    hold, train = [all_pairs[i] for i in order[:n_hold]], \
-                  [all_pairs[i] for i in order[n_hold:]]
-    print(f"[dpo] pairs={len(all_pairs)} train={len(train)} heldout={len(hold)}",
+    train, hold = split_holdout(all_pairs, args.heldout_frac, args.seed)
+    hold_prompts = sorted({p["prompt"] for p in hold})
+    print(f"[dpo] pairs={len(all_pairs)} train={len(train)} "
+          f"heldout={len(hold)} (holdout by prompt: {len(hold_prompts)} "
+          f"of {len({p['prompt'] for p in all_pairs})})",
           flush=True)
 
     policy = GPT(mcfg).to(device)
