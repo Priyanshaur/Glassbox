@@ -113,6 +113,19 @@
   coverage. A pretrain-weights TEMPLATE baseline (local CPU, same prompts +
   seeds, new file next to stories_256.txt) is part of the recheck; no
   adherence claim is made until it lands.
+- Pair-gate criterion change (deliberate, 2026-10-22): pair building no
+  longer scores binary pass/fail. Winners/rejecters come from the GRADED
+  rule — chosen must cover >= 1 more keyword than rejected, coverage =
+  strict whole-word count of the 3 keywords (whole-word matching, not the
+  substring check_criterion), and BOTH completions must end at their own
+  EOT and fall in the 10-500-word window. Measured on the 200-prompt x 6
+  probe (train-stream prompts = upper bound): binary whole-word yield ~18
+  pairs per 200 prompts (7.5% prompts kept) vs graded ~311 pairs (90.5%
+  kept). Accepted tradeoff: weaker warm-vs-cold contrast (2-vs-1 keyword
+  pairs included) in exchange for usable pair quantity. whole_word_ok in
+  train/pairs.py is the matched-scoring building block. Final gate: probe
+  (template_probe_samples.jsonl) also fixes sampling at max_new=256 (64 new
+  tokens cuts nearly every story mid-body and starves the EOT-ended rule).
 - Recheck outcome (2026-10-22): strict whole-word / story-prose / pre-first-EOT
   counting gives keyword coverage 0/5 pretrain vs 0/5 SFT (1 stray
   single-word hit baseline vs 4 SFT). Qualitative change confirmed though:
