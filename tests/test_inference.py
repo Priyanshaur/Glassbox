@@ -262,3 +262,88 @@ def test_stream_concatenates_to_generate_text():
             assert "".join(pieces) == full.texts[0]
     plain = Generator(debug_model(), tok())
     assert len(list(plain.stream(PROMPT, max_new=24, temperature=1.0, top_k=None, seed=0))) >= 1
+
+
+# ---------------------------------------------------------------- M3: quantization
+from inference.quantize import (QuantEmbedding, QuantLinear, load_quantized, quantize_model,  # noqa: E402
+                                quantize_rows, save_quantized, tensor_bytes, to_half)
+
+
+def test_quantize_rows_error_bounded_by_half_a_step():
+    torch.manual_seed(0)
+    w = torch.randn(16, 40) * torch.rand(16, 1) * 3
+    w[3] = 0.0                                     # an all-zero row must survive
+    q, s = quantize_rows(w)
+    assert q.dtype == torch.int8 and int(q.abs().max()) <= 127
+    err = (q.float() * s[:, None] - w).abs()
+    assert (err <= 0.5 * s[:, None] + 1e-6).all()
+    assert (q[3] == 0).all() and float(s[3]) == 1.0
+
+
+def test_quant_linear_matches_dequantized_linear():
+    torch.manual_seed(1)
+    lin = torch.nn.Linear(24, 10, bias=False)
+    ql = QuantLinear.from_linear(lin)
+    x = torch.randn(3, 5, 24)
+    want = torch.nn.functional.linear(x, ql.q.float() * ql.scale[:, None])
+    assert torch.allclose(ql(x), want, atol=1e-5, rtol=1e-5)
+    assert (ql(x) - lin(x)).abs().max() < 0.05 * lin(x).abs().max()
+
+
+@pytest.mark.parametrize("emb", [True, False])
+def test_quantized_model_is_close_and_has_no_float_linears(emb):
+    m = debug_model()
+    qm = quantize_model(m, quantize_embedding=emb)
+    assert not any(isinstance(x, torch.nn.Linear) for x in qm.modules())
+    assert isinstance(qm.wte, QuantEmbedding) == emb
+    assert tensor_bytes(qm) < (0.6 if emb else 1.0) * tensor_bytes(m)   # debug: the embedding is 85% of the params
+    ids = torch.randint(0, 8192, (2, 16))
+    with torch.no_grad():
+        a, b = m(ids).logits, qm(ids).logits
+    assert torch.isfinite(b).all()
+    assert (a - b).abs().max() < 0.05 * a.abs().max()
+    assert torch.equal(m(ids).logits, a)           # original model untouched
+
+
+def test_quantized_model_save_load_roundtrip_and_size(tmp_path):
+    m = debug_model()
+    qm = quantize_model(m, True)
+    p = str(tmp_path / "q.pt")
+    save_quantized(qm, p)
+    ql = load_quantized(load_config("configs/debug_cpu.yaml")["model"], p)
+    ids = torch.randint(0, 8192, (1, 12))
+    with torch.no_grad():
+        assert torch.equal(qm(ids).logits, ql(ids).logits)
+    torch.save(m.state_dict(), str(tmp_path / "f.pt"))
+    assert os.path.getsize(p) < 0.4 * os.path.getsize(str(tmp_path / "f.pt"))
+
+
+def test_quantized_model_works_with_static_cache_and_engine():
+    qm = quantize_model(debug_model(), True)
+    ids = torch.randint(0, 8192, (1, 10))
+    with torch.no_grad():
+        full = qm(ids).logits
+        inc = _incremental(qm, ids, StaticKVCache.from_model(qm, 1, 10))
+    assert torch.allclose(full, inc, atol=ATOL, rtol=RTOL)
+    r = Generator(qm, tok()).generate(PROMPT, n=2, max_new=10, seed=0)
+    assert len(r.texts) == 2 and r.n_steps >= 1
+
+
+def test_fp16_copy_is_finite_and_close():
+    m = debug_model()
+    h = to_half(m)
+    ids = torch.randint(0, 8192, (1, 12))
+    with torch.no_grad():
+        a, b = m(ids).logits, h(ids).logits
+    assert b.dtype == torch.float16 and torch.isfinite(b).all()
+    assert (a - b.float()).abs().max() < 0.05 * a.abs().max()
+    assert tensor_bytes(h) * 2 == tensor_bytes(m)
+
+
+@needs_sft
+def test_real_sft_int8_file_is_about_a_quarter_the_size(tmp_path):
+    m = sft_model()
+    qm = quantize_model(m, True)
+    p = str(tmp_path / "q.pt")
+    save_quantized(qm, p)
+    assert os.path.getsize(p) < 0.30 * os.path.getsize(SFT)
