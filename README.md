@@ -59,7 +59,26 @@ so a dead Kaggle session resumes with a continuous loss curve. See `docs/decisio
   `max_new=256`. A model that writes a story that long cannot reach its EOT, so
   `bench/win_rate.py` counts it as invalid (score -1). The sample is small; the
   probe's `eot_rate` decides whether to raise `max_new` to 384.
+- **DPO was trained on the same criterion it is scored on.** The pair rule is
+  whole-word keyword coverage, and the headline metric is keyword coverage, so
+  the coverage gain is circular evidence of story quality.
+- **The `eot_rate` guardrail (85%) was missed.** After DPO (lr 5e-6),
+  `eot_rate` was 78.7% (seed 0) and 81.3% (seed 1) against 93.2% for SFT.
+- **Sampling seeds are fixed per prompt.** Every model draws the same
+  randomness for a given validation prompt, so the bootstrap CIs (over prompts)
+  do not include sampling variation.
+- **Two training seeds only.** Variation across training seeds is based on two
+  runs, which also use different held-out prompt splits.
+- **No human evaluation yet.** The blind spot-check in `docs/human_spotcheck.md`
+  has not been rated.
 
 ## DPO learning rate
 
 The DPO final runs use `lr = 5e-6`. It was chosen for **stability**, not as a proven win over the other arms: in the 3-arm sweep (1e-6, 5e-6, 2e-5; 444 updates, beta 0.1) the 2e-5 arm overfit the training pairs and early-stopped at update 351 (held-out loss rose after step 200), and the 1e-6 arm was still improving at its last eval. Held-out reward accuracy (198 pairs, standard error about 0.035) could not separate the arms, and 5e-6 vs 2e-5 differed by only about 0.012 in best held-out loss, so the choice is a mild preference. It was fixed before the final evaluation and not tuned afterwards.
+
+## DPO result
+
+DPO raises keyword coverage (+0.8 of 3, 95% CIs exclude zero, both training
+seeds agree) and lowers `eot_rate` by 12-15 points, below the 85% guardrail.
+It is not an overall win. Details, finished-only coverage and length
+distributions: `docs/results_final.md`.
