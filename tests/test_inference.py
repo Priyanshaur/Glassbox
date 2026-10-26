@@ -120,3 +120,145 @@ def test_static_cache_real_sft_model_matches_full_forward_and_tuple_cache():
         static = _incremental(m, ids, StaticKVCache.from_model(m, 1, 40))
     assert torch.allclose(full, static, atol=ATOL, rtol=RTOL), float((full - static).abs().max())
     assert torch.allclose(cat, static, atol=ATOL, rtol=RTOL), float((cat - static).abs().max())
+
+
+# ---------------------------------------------------------------- M2: generation engine
+from inference.generate import Generator  # noqa: E402
+from tokenizer.bpe import BPETokenizer, EOT_ID  # noqa: E402
+from train.sample import sample_completions  # noqa: E402
+
+PROMPT = "Write a short story using all of these words: dragon, castle, brave.\n\nStory:"
+_TOK = None
+
+
+def tok():
+    global _TOK
+    if _TOK is None:
+        _TOK = BPETokenizer.load("tokenizer/tok8192.json")
+    return _TOK
+
+
+def eot_prone_model():
+    """Debug model whose tied head strongly prefers EOT, so EOT paths are exercised."""
+    m = debug_model()
+    hs = []
+    h = m.ln_f.register_forward_hook(lambda mod, i, o: hs.append(o.detach()))
+    with torch.no_grad():
+        m(torch.tensor([tok().encode(PROMPT)]))
+    h.remove()
+    mean = hs[0][0].mean(dim=0)
+    with torch.no_grad():
+        m.wte.weight[EOT_ID] = 6.0 * mean / mean.norm()
+    return m
+
+
+@pytest.mark.parametrize("n", [1, 4])
+@pytest.mark.parametrize("seed", [0, 1, 2])
+def test_engine_matches_sample_completions_same_seed(n, seed):
+    """Gate M2 (debug model): identical completions and EOT flags for the same seed."""
+    m = debug_model()
+    want, wflags = sample_completions(m, tok(), PROMPT, n=n, max_new=24, temperature=0.8,
+                                      top_k=50, seed=seed, device="cpu", return_flags=True)
+    got = Generator(m, tok()).generate(PROMPT, n=n, max_new=24, temperature=0.8, top_k=50,
+                                       seed=seed, replay_last_prompt_token=True)
+    assert got.texts == want
+    assert got.eot_hit == [f["eot_hit"] for f in wflags]
+
+
+def test_engine_parity_without_topk_and_with_eot_stops():
+    """Same parity with top_k=None / temperature 1.0, and on a model that actually samples EOT."""
+    m = eot_prone_model()
+    for seed in range(4):
+        want, wflags = sample_completions(m, tok(), PROMPT, n=3, max_new=24, temperature=1.0,
+                                          top_k=None, seed=seed, device="cpu", return_flags=True)
+        got = Generator(m, tok()).generate(PROMPT, n=3, max_new=24, temperature=1.0, top_k=None,
+                                           seed=seed, replay_last_prompt_token=True)
+        assert got.texts == want
+        assert got.eot_hit == [f["eot_hit"] for f in wflags]
+    # the EOT path really ran: at least one row finished early with a cut text
+    assert any(got.eot_hit) or any(f["eot_hit"] for f in wflags)
+
+
+@needs_sft
+@pytest.mark.parametrize("seed", [0, 1])
+def test_engine_matches_sample_completions_real_sft_model(seed):
+    """Gate M2 on the real SFT checkpoint (CPU, fp32): identical text and EOT flags."""
+    m = sft_model()
+    want, wflags = sample_completions(m, tok(), PROMPT, n=3, max_new=40, temperature=0.8,
+                                      top_k=40, seed=seed, device="cpu", return_flags=True)
+    got = Generator(m, tok()).generate(PROMPT, n=3, max_new=40, temperature=0.8, top_k=40,
+                                       seed=seed, replay_last_prompt_token=True)
+    assert got.texts == want
+    assert got.eot_hit == [f["eot_hit"] for f in wflags]
+
+
+def test_default_mode_uses_true_next_token_distribution_old_sampler_does_not():
+    """The old sampler re-feeds the last prompt token, which changes the first
+    next-token logits; the engine default does not."""
+    m = debug_model()
+    ids = torch.tensor([tok().encode(PROMPT)])
+    P = ids.shape[1]
+    with torch.no_grad():
+        true = m(ids).logits[:, -1]
+        cache = StaticKVCache.from_model(m, 1, P + 2)
+        pre = m(ids, past_kvs=cache.layers, pos_offset=0)
+        assert torch.allclose(pre.logits[:, -1], true, atol=ATOL, rtol=RTOL)   # engine default
+        replay = m(ids[:, -1:], past_kvs=cache.layers, pos_offset=P - 1).logits[:, -1]
+    assert cache.length == P + 1                                   # token cached twice
+    assert not torch.allclose(replay, true, atol=1e-4, rtol=1e-4)  # old sampler's first step differs
+
+
+def test_default_greedy_matches_naive_full_forward_rollout():
+    m = debug_model()
+    ids = torch.tensor([tok().encode(PROMPT)])
+    with torch.no_grad():
+        cur = ids
+        for _ in range(10):
+            cur = torch.cat([cur, m(cur).logits[:, -1].argmax(-1, keepdim=True)], dim=1)
+    got = Generator(m, tok()).generate(PROMPT, n=1, max_new=10, temperature=1e-6, top_k=None,
+                                       seed=0, stop_at_eot=False)
+    assert got.new_ids[0] == cur[0, ids.shape[1]:].tolist()
+
+
+def test_seed_determinism_and_sensitivity():
+    g = Generator(debug_model(), tok())
+    a = g.generate(PROMPT, n=2, max_new=20, seed=3).new_ids
+    assert a == g.generate(PROMPT, n=2, max_new=20, seed=3).new_ids
+    assert a != g.generate(PROMPT, n=2, max_new=20, seed=4).new_ids
+
+
+def test_top_p_one_is_noop_and_tiny_top_p_is_greedy():
+    g = Generator(debug_model(), tok())
+    base = g.generate(PROMPT, n=2, max_new=16, top_k=50, seed=5).new_ids
+    assert base == g.generate(PROMPT, n=2, max_new=16, top_k=50, top_p=1.0, seed=5).new_ids
+    greedy = g.generate(PROMPT, n=1, max_new=16, temperature=1e-6, top_k=None, seed=0).new_ids
+    for sd in (0, 1, 2):
+        assert g.generate(PROMPT, n=1, max_new=16, top_k=None, top_p=1e-9, seed=sd).new_ids == greedy
+
+
+def test_stop_at_eot_and_fixed_length(monkeypatch):
+    g = Generator(debug_model(), tok())
+    assert g.generate(PROMPT, n=1, max_new=12, stop_at_eot=False).n_steps == 12
+    calls = {"i": 0}
+
+    def fake(logits, gen, temperature, top_k, top_p):
+        calls["i"] += 1
+        return torch.full((logits.shape[0], 1), EOT_ID if calls["i"] == 3 else 5)
+
+    monkeypatch.setattr(Generator, "_sample", staticmethod(fake))
+    r = g.generate(PROMPT, n=1, max_new=12)
+    assert r.n_steps == 3 and r.eot_hit == [True]
+    calls["i"] = 0
+    assert g.generate(PROMPT, n=1, max_new=12, stop_at_eot=False).n_steps == 12
+
+
+def test_stream_concatenates_to_generate_text():
+    """Streaming pieces join to the generate() text, with and without an early EOT."""
+    for model in (debug_model(), eot_prone_model()):
+        g = Generator(model, tok())
+        for seed in range(3):
+            full = g.generate(PROMPT, n=1, max_new=24, temperature=1.0, top_k=None, seed=seed)
+            pieces = list(g.stream(PROMPT, max_new=24, temperature=1.0, top_k=None, seed=seed))
+            assert "".join(pieces) == full.texts[0]
+    plain = Generator(debug_model(), tok())
+    assert len(list(plain.stream(PROMPT, max_new=24, temperature=1.0, top_k=None, seed=0))) >= 1
