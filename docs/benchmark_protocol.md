@@ -127,3 +127,19 @@ every deviation is stated again next to the results:
 
 The full reference grid (K = 8, G = 128, n = 32, all no-cache cells) is intended
 for the GPU run.
+
+## fp16 acceptance (pre-registered 2026-10-27, committed before the T4 kernel runs)
+
+- **Criterion.** The fp16 model is accepted only if its gold-story perplexity is
+  within 2% of fp32: `|ppl_fp16 / ppl_fp32 - 1| <= 0.02`. Both are computed by the
+  T4 notebook's quality cell on the first 100 validation prompts (the same prompts
+  and scorer as `train/eval_quality.py`: `mean_nll` on the gold story, exp of total
+  NLL / total tokens), SFT checkpoint, fp32 weights cast to fp16 with
+  `inference.quantize.to_half`.
+- **If it fails**, the fp16 timings are still reported, flagged "failed the quality
+  gate", and fp16 is not recommended. Token agreement with fp32 in the correctness
+  gate stays informational and does not decide acceptance.
+- **Speed does not decide acceptance.** A faster fp16 that passes the gate is
+  reported as measured; a null result is reported as null.
+- Nothing about this criterion, the prompts or the scorer is changed after the
+  results are seen.
