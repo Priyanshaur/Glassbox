@@ -37,41 +37,15 @@ import sys
 import time
 
 sys.path.insert(0, ".")
-import numpy as np
 import torch
 import torch.nn.functional as F
 
 from common.config import load_config
 from model.gpt import GPT
 from tokenizer.bpe import BPETokenizer, EOT_ID
-from train.instruct import SALT, TMPL, content_words, iter_shard_texts
+from train.eval_prompts import STOPWORDS, eval_prompt, val_prompts  # noqa: F401
 from train.pairs import whole_word_count
 from train.sample import sample_completions
-
-
-# Function words of >= 4 letters (content_words keeps every word that long).
-# Eval prompts only: a stopword keyword is "covered" by any story, so it adds
-# no signal to the coverage metrics.
-STOPWORDS = frozenset("""
-    about after again also always another around because been before being
-    could does down each even ever every from have here into just know like
-    made make many more most much never only other over said same should
-    since some still such take than that their them then there these they
-    thing things this those through under very want well were what when
-    where which while will with would your once upon came went back
-""".split())
-
-
-def eval_prompt(text, idx, n_words=3):
-    """(prompt, keywords) with stopword-free keywords, or None if the story
-    has fewer than n_words of them. Same template, rng and salt scheme as
-    train.instruct.synth_prompt, only the candidate pool differs."""
-    words = [w for w in content_words(text) if w not in STOPWORDS]
-    if len(words) < n_words:
-        return None
-    rng = np.random.default_rng(np.random.SeedSequence([SALT, idx]))
-    kw = sorted(rng.choice(words, size=n_words, replace=False).tolist())
-    return TMPL.format(words=", ".join(kw)), kw
 
 
 @torch.no_grad()
@@ -130,15 +104,9 @@ def main():
                                       weights_only=True))
     scorer.eval()
 
-    # val-split template prompts (validation split never trained on)
-    prompts, idx = [], 0
-    for text in iter_shard_texts(tok, cfg["data"]["out_dir"], "validation"):
-        sp = eval_prompt(text, idx)
-        if sp is not None:
-            prompts.append((idx, sp[0], sp[1], text))
-        idx += 1
-        if len(prompts) >= args.n_prompts:
-            break
+    # val-split template prompts (validation split never trained on), built by
+    # the same function bench/win_rate.py uses
+    prompts = val_prompts(tok, cfg["data"]["out_dir"], args.n_prompts)
     print(f"[eval] {len(prompts)} val prompts | model={args.label or args.weights}",
           flush=True)
 
