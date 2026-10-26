@@ -199,3 +199,53 @@
 - uint16 shards (8192 < 65536).
 - Smoke only: --max_docs 1000 train / 200 val. Full run deferred to Kaggle (internet on, save out_dir as dataset). Do NOT run full locally.
 - Run modules as `python -m` (e.g. `python -m data.prepare`), not `python path/file.py`. Reason: absolute `from tokenizer...` imports need repo root on sys.path; script-path mode breaks it (hit during smoke test, fixed by convention).
+
+## Corpus mojibake and the "if retraining" fix (2026-10-27) - NOT applied
+
+Finding (evidence: `docs/source_mojibake_check.md`, `docs/results_folded.md`,
+`analysis/check_source_mojibake.py`): the Hub's parquet version of
+`roneneldan/TinyStories` (what `load_dataset(...)` returns and `data/prepare.py`
+tokenizes unchanged) has UTF-8 curly quotes and dashes decoded as cp1252 with
+the undefined bytes dropped. A right single quote (U+2019) appears as U+00E2
+U+20AC U+2122. About 4-5% of stories are affected (4.9% train, 3.7% validation,
+from 3,000 streamed stories per split, so approximate), and no correct U+2019
+survives. The original raw `TinyStories-train.txt` / `TinyStories-valid.txt` are
+clean UTF-8: over the first 4 MB of the validation file, 282 of 282 non-ASCII
+stories equal the raw text re-decoded as cp1252 (errors="ignore"), and the 4,561
+ASCII-only stories match the parquet text exactly. So `prepare.py` did not
+introduce it.
+
+Impact so far: the tokenizer learned merges for the garbled bytes (26 vocab
+entries contain them), the pretrained/SFT/DPO models reproduce the sequence in
+1.7-3.3% of samples, and the closing double quote has permanently lost a byte in
+the parquet text (not recoverable from it). Folding the garbled apostrophe back
+before whole-word scoring changed 0 of 1,800 saved samples, so reported keyword
+coverage is unaffected.
+
+Decision: leave the current corpus, tokenizer and models as they are and keep
+this as a documented limitation (README Limitations).
+
+If retraining (all of the following would be redone; nothing here is applied):
+
+1. Change only the text source in `data/prepare.py::encode_stream`: read the raw
+   files `TinyStories-train.txt` and `TinyStories-valid.txt` from the same Hub
+   repo (not the parquet-backed default loader) and split on `<|endoftext|>`,
+   stripping the surrounding whitespace. The train file is about 1.9 GB and the
+   validation file about 19 MB. Keep appending EOT after every story, the same
+   uint16 shards and the same resumability.
+2. Verify before trusting it: the first stories of the raw validation file must
+   equal the parquet-loader validation stories after whitespace normalisation for
+   every ASCII-only story (4,561 of 4,561 matched in the check above), differing
+   only on non-ASCII stories. Count U+00E2 U+20AC sequences in the new shards: it
+   must be 0, and correct U+2019 bytes (E2 80 99) must now be present.
+3. Recommended: retrain the tokenizer on the clean text. The old byte-level
+   tokenizer would still work on clean text, but 26 of its vocab entries are
+   spent on the garbled bytes. Either way the data must be re-prepared and the
+   model pretrained from scratch (about 8.8 GPU hours last time), then SFT, the
+   pair builder and DPO. A new tokenizer additionally makes the old checkpoints
+   unusable.
+4. Keep the validation split comparable: the raw validation file is the same
+   official validation set, so val numbers stay comparable to published ones.
+5. Caveat: do not repair the existing text with a cp1252 round trip
+   (`text.encode("cp1252").decode("utf-8")`). The closing double quote U+201D lost
+   its third byte, and the repair fails or corrupts those stories.
