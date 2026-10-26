@@ -176,14 +176,14 @@ def main():
 
     os.makedirs(args.ckpt_dir, exist_ok=True)
     metrics_path = os.path.join(args.ckpt_dir, "metrics_dpo.jsonl")
-    prior_hl = []                      # F1: held-out losses already on disk
+    prior_hl = []                      # (step, h_loss) already on disk
     if os.path.exists(metrics_path):
         with open(metrics_path, encoding="utf-8") as f:
             for line in f:
                 if line.strip():
                     r = json.loads(line)
                     if "h_loss" in r:
-                        prior_hl.append(r["h_loss"])
+                        prior_hl.append((r["step"], r["h_loss"]))
     metrics_f = open(metrics_path, "a", encoding="utf-8")
     tok_hash = ckpt_mod.file_hash(cfg["data"]["tokenizer_path"])
     full_cfg = {"model": mcfg, "seed": args.seed}
@@ -207,12 +207,15 @@ def main():
         print(f"[dpo] resumed {args.resume} -> next step {start_step}",
               flush=True)
     best, stale = float("inf"), 0
-    if start_step and prior_hl:
-        # Resume: the best held-out loss and the patience counter come from
-        # the metrics already on disk, so a resumed run neither forgets its
-        # best checkpoint nor restarts early stopping from zero.
-        best = min(prior_hl)
-        stale = len(prior_hl) - 1 - prior_hl.index(best)
+    if start_step:
+        # Resume from a checkpoint saved at step start_step-1, which is the
+        # best held-out point by construction. Evals after it are replayed
+        # (same data order, no dropout), so they must NOT be pre-counted in
+        # `stale` -- that would double-count and stop earlier than an
+        # uninterrupted run. best = best h_loss at/before the checkpoint.
+        before = [h for st, h in prior_hl if st < start_step]
+        if before:
+            best = min(before)
     loss = acc = marg = ch = t_step = None  # last fresh update; None until one runs
 
     def log_final_step():
@@ -227,11 +230,32 @@ def main():
         print(f"[dpo] final step={step - 1} loss={loss:.3f} acc={acc:.2f} "
               f"marg={marg:.2f} ch_lp={ch:.1f} t={t_step:.2f}s", flush=True)
 
+    def finish(reason):
+        """Terminal row: WHY the run stopped. The launcher raises unless the
+        reason is max_steps / epochs / early_stop (max_hours is incomplete)."""
+        log_final_step()
+        rec = {"terminal": reason, "updates_done": step, "best_h_loss": best}
+        metrics_f.write(json.dumps(rec) + "\n")
+        metrics_f.flush()
+        print(f"[dpo] terminal={reason} updates_done={step}", flush=True)
+        metrics_f.close()
+        return 0
+
     if args.max_steps and start_step >= args.max_steps:
         print(f"[dpo] already at/past max_steps ({start_step}>={args.max_steps})",
               flush=True)
-        metrics_f.close()
-        return 0
+        return finish("max_steps")
+    if start_step == 0 and not prior_hl:
+        # Pre-update held-out eval: sanity check (policy == ref => loss ln2,
+        # acc 0) and the baseline the later evals are compared against.
+        te0 = time.perf_counter()
+        hl0, ha0 = heldout()
+        rec = {"pre_update": True, "step": -1, "h0_loss": hl0, "h0_acc": ha0,
+               "t_eval": round(time.perf_counter() - te0, 3)}
+        metrics_f.write(json.dumps(rec) + "\n")
+        metrics_f.flush()
+        print(f"[dpo] pre-update held-out loss={hl0:.4f} acc={ha0:.2f} "
+              f"(expect ln2=0.6931 / 0.00)", flush=True)
     t_start = time.perf_counter()
     for epoch in range(args.epochs):
         rng_e = np.random.default_rng(np.random.SeedSequence([args.seed, epoch]))
@@ -243,17 +267,13 @@ def main():
             if args.max_steps and step >= args.max_steps:
                 print(f"[dpo] reached max_steps={args.max_steps}; stopping",
                       flush=True)
-                log_final_step()
-                metrics_f.close()
-                return 0
+                return finish("max_steps")
             if args.max_hours and (time.perf_counter() - t_start
                                    ) >= args.max_hours * 3600:
                 print(f"[dpo] reached max_hours={args.max_hours:g}; exiting "
                       "cleanly (best ckpt on disk; --resume latest continues)",
                       flush=True)
-                log_final_step()
-                metrics_f.close()
-                return 0
+                return finish("max_hours")
             t0 = time.perf_counter()
             chunk = [train[int(j)] for j in idx[s:s + args.batch]]
             loss, acc, marg, ch = batch_stats(chunk)
@@ -282,13 +302,14 @@ def main():
                        f"t_eval={rec.get('t_eval', float('nan')):.1f}s" if "h_loss" in rec else ""),
                       flush=True)
             step += 1
-        if stale >= args.patience:
-            print(f"[dpo] early stop at epoch {epoch} (best h_loss={best:.3f})",
-                  flush=True)
-            break
-    log_final_step()
-    metrics_f.close()
-    return 0
+            # Per-eval early stop: `stale` only changes at an eval, so
+            # checking right after the update that ran it stops at that eval
+            # instead of waiting for the epoch boundary.
+            if stale >= args.patience:
+                print(f"[dpo] early stop at step {step - 1} "
+                      f"(best h_loss={best:.3f})", flush=True)
+                return finish("early_stop")
+    return finish("epochs")
 
 
 if __name__ == "__main__":
