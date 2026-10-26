@@ -1,4 +1,4 @@
-﻿"""DPO by hand: frozen SFT reference, policy learns pass-over-fail margins.
+"""DPO by hand: frozen SFT reference, policy learns pass-over-fail margins.
 
 loss = -log sigmoid(beta * ((lp_w - lp_l) - (lr_w - lr_l))), response-token
 logprob SUMS (prompt masked like SFT). Logs: loss, reward accuracy
@@ -12,6 +12,7 @@ import argparse
 import json
 import os
 import sys
+import time
 
 import numpy as np
 import torch
@@ -22,6 +23,26 @@ from model.gpt import GPT
 from tokenizer.bpe import BPETokenizer, EOT_ID, PAD_ID
 from train import checkpoint as ckpt_mod
 from train.optim import build_param_groups
+
+
+def load_pairs(path):
+    """Accept BOTH formats: flat {prompt,winner,loser} rows and the graded
+    per-prompt records written by train.pairs.build_pairs_graded
+    ({idx, prompt, pairs: [{prompt,winner,loser,margin}]}). Returns a flat
+    list of {prompt, winner, loser} dicts."""
+    out = []
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            if not line.strip():
+                continue
+            rec = json.loads(line)
+            if "pairs" in rec and isinstance(rec["pairs"], list):
+                out.extend({"prompt": p["prompt"], "winner": p["winner"],
+                            "loser": p["loser"]} for p in rec["pairs"])
+            else:
+                out.append({"prompt": rec["prompt"],
+                            "winner": rec["winner"], "loser": rec["loser"]})
+    return out
 
 
 def response_logps(model, tok, prompt, completion, context_len, device):
@@ -76,6 +97,13 @@ def main():
     ap.add_argument("--eval_every", type=int, default=50)
     ap.add_argument("--patience", type=int, default=3)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--resume", default="none",
+                    help="'latest' (resume from ckpt_dir), 'none', or a ckpt path")
+    ap.add_argument("--max_steps", type=int, default=0,
+                    help="stop after this many total updates (0 = run all)")
+    ap.add_argument("--max_hours", type=float, default=0.0,
+                    help="exit cleanly at a step boundary after this many "
+                         "wall-clock hours (0 = no cap)")
     args = ap.parse_args()
 
     cfg = load_config(args.config)
@@ -84,8 +112,7 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     tok = BPETokenizer.load(cfg["data"]["tokenizer_path"])
 
-    with open(args.pairs, encoding="utf-8") as f:
-        all_pairs = [json.loads(l) for l in f]
+    all_pairs = load_pairs(args.pairs)
     train, hold = split_holdout(all_pairs, args.heldout_frac, args.seed)
     hold_prompts = sorted({p["prompt"] for p in hold})
     print(f"[dpo] pairs={len(all_pairs)} train={len(train)} "
@@ -123,11 +150,11 @@ def main():
             loss.backward()
             torch.nn.utils.clip_grad_norm_(policy.parameters(), 1.0)
             opt.step()
-            margs = torch.stack([m for _, m in losses])
+            margs = torch.stack([m for _, m in losses]).detach()
             tot_loss += loss.item() * len(chunk)
             tot_acc += float((margs > 0).float().mean()) * len(chunk)
             tot_marg += float(margs.mean()) * len(chunk)
-            tot_ch += float(sum(float(a) for a, _ in lps))
+            tot_ch += float(sum(float(a.detach()) for a, _ in lps))
         n = len(pairs)
         return tot_loss / n, tot_acc / n, tot_marg / n, tot_ch / n
 
@@ -148,23 +175,96 @@ def main():
         return tot_loss / n, tot_acc / n
 
     os.makedirs(args.ckpt_dir, exist_ok=True)
-    metrics_f = open(os.path.join(args.ckpt_dir, "metrics_dpo.jsonl"), "a",
-                     encoding="utf-8")
+    metrics_path = os.path.join(args.ckpt_dir, "metrics_dpo.jsonl")
+    prior_hl = []                      # F1: held-out losses already on disk
+    if os.path.exists(metrics_path):
+        with open(metrics_path, encoding="utf-8") as f:
+            for line in f:
+                if line.strip():
+                    r = json.loads(line)
+                    if "h_loss" in r:
+                        prior_hl.append(r["h_loss"])
+    metrics_f = open(metrics_path, "a", encoding="utf-8")
     tok_hash = ckpt_mod.file_hash(cfg["data"]["tokenizer_path"])
     full_cfg = {"model": mcfg, "seed": args.seed}
     scaler = torch.amp.GradScaler("cuda", enabled=False)
-    best, stale, step = float("inf"), 0, 0
+    start_step = 0
+    step = 0
+    if args.resume == "latest":
+        latest = ckpt_mod.latest_checkpoint(args.ckpt_dir)
+        if latest:
+            start_step = ckpt_mod.load_checkpoint(latest, policy, opt, scaler,
+                                                  cfg["data"]["tokenizer_path"],
+                                                  mcfg)
+            print(f"[dpo] resumed {latest} -> next step {start_step}", flush=True)
+        else:
+            print("[dpo] --resume latest: no checkpoint yet; starting fresh",
+                  flush=True)
+    elif args.resume != "none":
+        start_step = ckpt_mod.load_checkpoint(args.resume, policy, opt, scaler,
+                                              cfg["data"]["tokenizer_path"],
+                                              mcfg)
+        print(f"[dpo] resumed {args.resume} -> next step {start_step}",
+              flush=True)
+    best, stale = float("inf"), 0
+    if start_step and prior_hl:
+        # Resume: the best held-out loss and the patience counter come from
+        # the metrics already on disk, so a resumed run neither forgets its
+        # best checkpoint nor restarts early stopping from zero.
+        best = min(prior_hl)
+        stale = len(prior_hl) - 1 - prior_hl.index(best)
+    loss = acc = marg = ch = t_step = None  # last fresh update; None until one runs
+
+    def log_final_step():
+        """Record the last completed update even when it falls off the
+        every-10 logging boundary (a 20-step run ends at step 19)."""
+        if loss is None or step <= 0 or (step - 1) % 10 == 0:
+            return
+        rec = {"step": step - 1, "loss": loss, "acc": acc,
+               "margin": marg, "chosen_lp": ch, "t_step": round(t_step, 3)}
+        metrics_f.write(json.dumps(rec) + "\n")
+        metrics_f.flush()
+        print(f"[dpo] final step={step - 1} loss={loss:.3f} acc={acc:.2f} "
+              f"marg={marg:.2f} ch_lp={ch:.1f} t={t_step:.2f}s", flush=True)
+
+    if args.max_steps and start_step >= args.max_steps:
+        print(f"[dpo] already at/past max_steps ({start_step}>={args.max_steps})",
+              flush=True)
+        metrics_f.close()
+        return 0
+    t_start = time.perf_counter()
     for epoch in range(args.epochs):
         rng_e = np.random.default_rng(np.random.SeedSequence([args.seed, epoch]))
         idx = rng_e.permutation(len(train))
         for s in range(0, len(train), args.batch):
+            if start_step and step < start_step:
+                step += 1
+                continue  # replayed on resume; skip the already-done updates
+            if args.max_steps and step >= args.max_steps:
+                print(f"[dpo] reached max_steps={args.max_steps}; stopping",
+                      flush=True)
+                log_final_step()
+                metrics_f.close()
+                return 0
+            if args.max_hours and (time.perf_counter() - t_start
+                                   ) >= args.max_hours * 3600:
+                print(f"[dpo] reached max_hours={args.max_hours:g}; exiting "
+                      "cleanly (best ckpt on disk; --resume latest continues)",
+                      flush=True)
+                log_final_step()
+                metrics_f.close()
+                return 0
+            t0 = time.perf_counter()
             chunk = [train[int(j)] for j in idx[s:s + args.batch]]
             loss, acc, marg, ch = batch_stats(chunk)
+            t_step = time.perf_counter() - t0
             if step % 10 == 0:
                 rec = {"step": step, "loss": loss, "acc": acc,
-                       "margin": marg, "chosen_lp": ch}
+                       "margin": marg, "chosen_lp": ch, "t_step": round(t_step, 3)}
                 if step % args.eval_every == 0:
+                    te0 = time.perf_counter()
                     hl, ha = heldout()
+                    rec["t_eval"] = round(time.perf_counter() - te0, 3)
                     rec["h_loss"], rec["h_acc"] = hl, ha
                     if hl < best:
                         best, stale = hl, 0
@@ -176,14 +276,17 @@ def main():
                 metrics_f.write(json.dumps(rec) + "\n")
                 metrics_f.flush()
                 print(f"[dpo] step={step} loss={loss:.3f} acc={acc:.2f} "
-                      f"marg={marg:.2f} ch_lp={ch:.1f} " +
-                      (f"h_loss={rec.get('h_loss', float('nan')):.3f}" if "h_loss" in rec else ""),
+                      f"marg={marg:.2f} ch_lp={ch:.1f} t={t_step:.2f}s " +
+                      (f"h_loss={rec.get('h_loss', float('nan')):.3f} "
+                       f"h_acc={rec.get('h_acc', float('nan')):.2f} "
+                       f"t_eval={rec.get('t_eval', float('nan')):.1f}s" if "h_loss" in rec else ""),
                       flush=True)
             step += 1
         if stale >= args.patience:
             print(f"[dpo] early stop at epoch {epoch} (best h_loss={best:.3f})",
                   flush=True)
             break
+    log_final_step()
     metrics_f.close()
     return 0
 
