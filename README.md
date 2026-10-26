@@ -59,3 +59,7 @@ so a dead Kaggle session resumes with a continuous loss curve. See `docs/decisio
   `max_new=256`. A model that writes a story that long cannot reach its EOT, so
   `bench/win_rate.py` counts it as invalid (score -1). The sample is small; the
   probe's `eot_rate` decides whether to raise `max_new` to 384.
+
+## DPO learning rate
+
+The DPO final runs use `lr = 5e-6`. It was chosen for **stability**, not as a proven win over the other arms: in the 3-arm sweep (1e-6, 5e-6, 2e-5; 444 updates, beta 0.1) the 2e-5 arm overfit the training pairs and early-stopped at update 351 (held-out loss rose after step 200), and the 1e-6 arm was still improving at its last eval. Held-out reward accuracy (198 pairs, standard error about 0.035) could not separate the arms, and 5e-6 vs 2e-5 differed by only about 0.012 in best held-out loss, so the choice is a mild preference. It was fixed before the final evaluation and not tuned afterwards.
