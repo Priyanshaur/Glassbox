@@ -343,3 +343,35 @@ def test_sft_resume_already_complete_is_noop(tmp_path, monkeypatch):
     assert not (ckdir / "metrics_sft.jsonl").exists(), \
         "already-complete resume appended metrics"
 
+
+
+def _run_dpo(monkeypatch, tmp_path, *extra):
+    import sys
+    from train import dpo
+    argv = ["dpo", "--config", "configs/debug_cpu.yaml",
+            "--init_policy", str(tmp_path / "init.pt"),
+            "--pairs", str(tmp_path / "pairs.jsonl"),
+            "--ckpt_dir", str(tmp_path / "ck"), "--batch", "2",
+            "--eval_every", "2", "--heldout_frac", "0.34", "--lr", "1e-4",
+            *extra]
+    monkeypatch.setattr(sys, "argv", argv)
+    return dpo.main()
+
+
+def test_dpo_exit_paths_and_resume(tmp_path, monkeypatch):
+    """max_steps / max_hours exits return 0 (no NameError), and a resume
+    restores the best held-out loss from metrics instead of resetting it."""
+    import json
+    cfg = load_config("configs/debug_cpu.yaml")["model"]
+    torch.manual_seed(0)
+    torch.save(GPT(cfg).state_dict(), tmp_path / "init.pt")
+    with open(tmp_path / "pairs.jsonl", "w", encoding="utf-8") as f:
+        for i in range(6):
+            f.write(json.dumps({"prompt": P + f" {i}", "winner": W,
+                                "loser": L}) + "\n")
+    assert _run_dpo(monkeypatch, tmp_path, "--max_steps", "3") == 0
+    assert _run_dpo(monkeypatch, tmp_path, "--max_hours", "1e-9",
+                    "--resume", "latest") == 0
+    rows = [json.loads(l) for l in
+            open(tmp_path / "ck" / "metrics_dpo.jsonl", encoding="utf-8")]
+    assert any("h_loss" in r for r in rows)
