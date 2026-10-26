@@ -57,8 +57,15 @@ so a dead Kaggle session resumes with a continuous loss curve. See `docs/decisio
 - **About 6% of validation gold stories exceed 256 tokens.** On the local
   200-story validation sample, 94% of gold stories (plus EOT) fit in
   `max_new=256`. A model that writes a story that long cannot reach its EOT, so
-  `bench/win_rate.py` counts it as invalid (score -1). The sample is small; the
-  probe's `eot_rate` decides whether to raise `max_new` to 384.
+  `bench/win_rate.py` counts it as invalid (score -1). The sample is small. In
+  the final run `eot_rate` fell from 93.2% (SFT) to 78.7% / 81.3% (DPO seeds 0
+  / 1); whether those extra unfinished stories are stories that run out of
+  tokens or stories that fail to end is not determined, and a `max_new=384`
+  re-run is pending.
+- **The finished-only comparison is descriptive, not paired.** The coverage
+  numbers restricted to finished stories in `docs/results_final.md` condition
+  on finishing, which selects a different subset of samples for each model, so
+  they do not compare the same stories.
 - **DPO was trained on the same criterion it is scored on.** The pair rule is
   whole-word keyword coverage, and the headline metric is keyword coverage, so
   the coverage gain is circular evidence of story quality.
