@@ -54,3 +54,8 @@ so a dead Kaggle session resumes with a continuous loss curve. See `docs/decisio
   validation shard (about 24% of unfiltered keywords and 56% of prompts had at
   least one stopword there), so the list is not validated at scale. SFT and pair
   building still use the unfiltered `synth_prompt`.
+- **About 6% of validation gold stories exceed 256 tokens.** On the local
+  200-story validation sample, 94% of gold stories (plus EOT) fit in
+  `max_new=256`. A model that writes a story that long cannot reach its EOT, so
+  `bench/win_rate.py` counts it as invalid (score -1). The sample is small; the
+  probe's `eot_rate` decides whether to raise `max_new` to 384.
