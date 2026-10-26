@@ -87,3 +87,43 @@ is flagged as such.
   summary can be recomputed.
 - Statements like "faster" require the paired-bootstrap CI of the ratio to exclude
   1; otherwise the result is reported as "no measurable difference".
+
+## CPU run parameters (addendum, fixed before the first timing)
+
+The protocol above is the reference. A first calibration on the laptop CPU (6
+threads, fp32, not reported as results) measured these per-step costs:
+
+| case | prefill | decode per step |
+|---|---|---|
+| cached, n=1, short | 50 ms | 21 ms |
+| cached, n=8, long | 1.06 s | 28 ms |
+| cached, n=32, long | 4.4 s | 52 ms |
+| int8 (accepted variant), n=1, short | 55 ms | 33 ms |
+| no cache, n=1, short | - | 32 ms at context 23 (grows with context) |
+| no cache, n=8, short | - | 109 ms at context 23 |
+| no cache, n=1, long | - | 154 ms at context 256 |
+
+With the reference parameters (8 prompts, G = 128, 13 generations per prompt per
+config) the full grid would take about 3.8 hours of CPU, dominated by no-cache and
+int8. The CPU run therefore deviates from the reference in exactly these ways;
+every deviation is stated again next to the results:
+
+- **K = 4 prompts** (the first 4 of the 8) and **G = 64 new tokens** instead of 8 and
+  128. R = 10 repeats, 3 untimed warm-up generations (one generation = one prompt,
+  the first), interleaving, medians and spreads are unchanged. "One repetition"
+  generates for all K prompts in order.
+- **No-cache runs only for** short n=1, short n=8 and long n=1. No-cache n=32
+  (both regimes) and long n=8 are not run: their estimated cost is hours each.
+  They are listed as "not run" in the table, not omitted.
+- **int8** is run with the static cache only.
+- **Correctness gate semantics.** tuple vs static are bit-identical by
+  construction (M1): their sampled tokens must be equal. The no-cache loop is
+  mathematically equivalent but numerically different (about 1e-5 in the logits),
+  which can flip a rare sampled token, so its gate is teacher-forced: along the
+  static run's tokens, no-cache logits must match cached logits (atol = rtol =
+  1e-4). Token agreement with the static run is reported for it, not required.
+- Machine state (AC power, background load) is recorded as observed; it was not
+  controlled beyond not running anything else during the benchmark.
+
+The full reference grid (K = 8, G = 128, n = 32, all no-cache cells) is intended
+for the GPU run.
