@@ -582,3 +582,55 @@ def test_win_rate_ties_and_validity_accounting():
     assert (w, l, t) == (3, 1, 6)
     assert w / (w + l) == 0.75 and w / len(outs) == 0.3
     assert wilson(w, w + l) == wilson(3, 4)
+
+
+def test_eval_scripts_build_identical_prompts_for_same_idx(tmp_path, monkeypatch):
+    """eval_quality and win_rate must ask the SAME question for the same val
+    story idx (same stopword-filtered prompt and keywords). Checked on what
+    each script actually passes to its sampler, and against eval_prompt."""
+    import sys
+    from bench import win_rate
+    from train import eval_prompts, eval_quality
+    from train.instruct import docs_from_shard
+    assert win_rate.val_prompts is eval_quality.val_prompts is eval_prompts.val_prompts
+    cfg = load_config("configs/debug_cpu.yaml")["model"]
+    torch.manual_seed(0)
+    torch.save(GPT(cfg).state_dict(), tmp_path / "w.pt")
+
+    def record(mod, stash):
+        real = mod.sample_completions
+
+        def spy(model, tok, prompt, **kw):
+            stash.append(prompt)
+            return real(model, tok, prompt, **kw)
+        monkeypatch.setattr(mod, "sample_completions", spy)
+
+    seen_q, seen_w = [], []
+    record(eval_quality, seen_q)
+    record(win_rate, seen_w)
+    w = str(tmp_path / "w.pt")
+    monkeypatch.setattr(sys, "argv", [
+        "eval_quality", "--config", "configs/debug_cpu.yaml", "--weights", w,
+        "--ppl_weights", w, "--out", str(tmp_path / "e.jsonl"),
+        "--n_prompts", "6", "--n_samples", "1", "--max_new", "4"])
+    assert eval_quality.main() == 0
+    monkeypatch.setattr(sys, "argv", [
+        "win_rate", "--config", "configs/debug_cpu.yaml", "--sft_weights", w,
+        "--dpo_weights", w, "--n_prompts", "6", "--max_new", "4",
+        "--out", str(tmp_path / "wr.json")])
+    assert win_rate.main() == 0
+    uniq_w = list(dict.fromkeys(seen_w))          # win_rate samples twice/prompt
+    assert len(seen_q) == len(uniq_w) == 6 and seen_q == uniq_w
+    expect = []
+    for i, t in enumerate(docs_from_shard(tok(), "data", "validation")):
+        sp = eval_prompt_for(t, i)
+        if sp:
+            expect.append(sp[0])
+        if len(expect) == 6:
+            break
+    assert seen_q == expect
+
+
+def eval_prompt_for(text, idx):
+    from train.eval_prompts import eval_prompt
+    return eval_prompt(text, idx)

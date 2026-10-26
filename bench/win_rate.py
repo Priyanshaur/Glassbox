@@ -24,7 +24,8 @@ import torch
 from common.config import load_config
 from model.gpt import GPT
 from tokenizer.bpe import BPETokenizer
-from train.instruct import build_sft_example, docs_from_shard, synth_prompt
+from train.eval_prompts import val_prompts
+from train.instruct import build_sft_example
 from train.pairs import whole_word_count
 from train.sample import prompt_ids, sample_completions
 from train.sft import response_loss
@@ -96,14 +97,10 @@ def main():
     mcfg = cfg["model"]
     device = "cuda" if torch.cuda.is_available() else "cpu"
     tok = BPETokenizer.load(cfg["data"]["tokenizer_path"])
-    val_texts = docs_from_shard(tok, cfg["data"]["out_dir"], "validation")
-    prompts = []
-    for i, t in enumerate(val_texts):
-        sp = synth_prompt(t, i)  # val story idx, same keying as eval_quality
-        if sp is not None:
-            prompts.append((sp[0], sp[1], t))  # keep source story for val ppl
-        if len(prompts) >= args.n_prompts:
-            break
+    # same prompts, same idx keying as train/eval_quality.py (shared function);
+    # keep the source story for val ppl
+    prompts = [(p, kw, text) for _, p, kw, text in
+               val_prompts(tok, cfg["data"]["out_dir"], args.n_prompts)]
 
     sft = GPT(mcfg).to(device)
     sft.load_state_dict(torch.load(args.sft_weights, map_location=device,
