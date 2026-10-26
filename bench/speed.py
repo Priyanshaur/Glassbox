@@ -385,7 +385,7 @@ def write_markdown(path, env, params, cfgs, rows, comps, gate, skipped, dropped,
         for n_, why in skipped:
             P(f"- {n_}: {why}")
         P("")
-    P("## Comparisons (speedup = time of the first / time of the second; >1 means the second is faster)\n")
+    P("## Comparisons (for 'A vs B', speedup = median time of B / median time of A, so >1 means A (the first-named config) is faster)\n")
     P("Paired bootstrap over repeats (B=10,000). 'faster' / 'slower' only when the 95% CI excludes 1.\n")
     P("| comparison | end-to-end | decode | TTFT |")
     P("|---|---|---|---|")
