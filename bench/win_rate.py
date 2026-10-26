@@ -49,6 +49,27 @@ def graded_score(text, keywords, eot_hit):
     return whole_word_count(text, keywords)
 
 
+TIE_RULE = ("tie = equal graded score: both completions invalid (-1) or both "
+            "valid with equal keyword coverage. Ties are excluded from "
+            "win_rate_decided and its CI, and counted as non-wins in "
+            "win_rate_all_pairs. Validity (EOT-ended, 10-500 words) is "
+            "reported per arm in *_valid_rate and is NOT part of the win rate "
+            "alone: wins/losses split into 'validity' (one side invalid) and "
+            "'coverage' (both valid, different coverage).")
+
+
+def pair_outcome(sft_score, dpo_score):
+    """(outcome, kind) for one pair of graded scores (-1 = invalid).
+
+    kind says what decided it: 'validity' (exactly one side valid),
+    'coverage' (both valid, different coverage), or for ties
+    'both_invalid' / 'equal_valid'."""
+    if sft_score == dpo_score:
+        return "tie", ("both_invalid" if sft_score < 0 else "equal_valid")
+    kind = "validity" if min(sft_score, dpo_score) < 0 else "coverage"
+    return ("win" if dpo_score > sft_score else "loss"), kind
+
+
 def distinct_2(texts):
     bis, n = set(), 0
     for t in texts:
@@ -94,6 +115,7 @@ def main():
     wins = ties = losses = skipped = 0
     sft_texts, dpo_texts, rows = [], [], []
     sft_sc, dpo_sc, sft_eot, dpo_eot = [], [], 0, 0
+    kinds = {}
     for i, (prompt, kw, _src) in enumerate(prompts):
         plen = len(prompt_ids(tok, prompt))
         if plen + 8 > cfg["model"]["context_len"]:
@@ -115,12 +137,13 @@ def main():
         dpo_sc.append(sb)
         sft_eot += fa[0]["eot_hit"]
         dpo_eot += fb[0]["eot_hit"]
-        outcome = "tie" if sa == sb else ("win" if sb > sa else "loss")
+        outcome, kind = pair_outcome(sa, sb)
         wins += outcome == "win"
         ties += outcome == "tie"
         losses += outcome == "loss"
+        kinds[(outcome, kind)] = kinds.get((outcome, kind), 0) + 1
         rows.append({"prompt": prompt, "sft": a, "dpo": b, "outcome": outcome,
-                     "sft_score": sa, "dpo_score": sb})
+                     "kind": kind, "sft_score": sa, "dpo_score": sb})
 
     decided = wins + losses
     lo, hi = wilson(wins, decided)
@@ -128,9 +151,18 @@ def main():
               (build_sft_example(tok, p, t, cfg["train"]["context_len"])
                for p, t in ((p, s) for p, _, s in prompts))]
     rep = {"n": len(prompts), "skipped_ctx": skipped,
+           "n_evaluated": len(rows),
            "wins": wins, "ties": ties, "losses": losses,
            "win_rate_decided": wins / max(decided, 1),
-           "ci95": [lo, hi],
+           "ci95_decided": [lo, hi],
+           "win_rate_all_pairs": wins / max(len(rows), 1),
+           "tie_rule": TIE_RULE,
+           "wins_validity": kinds.get(("win", "validity"), 0),
+           "wins_coverage": kinds.get(("win", "coverage"), 0),
+           "losses_validity": kinds.get(("loss", "validity"), 0),
+           "losses_coverage": kinds.get(("loss", "coverage"), 0),
+           "ties_both_invalid": kinds.get(("tie", "both_invalid"), 0),
+           "ties_equal_valid": kinds.get(("tie", "equal_valid"), 0),
            "note": "rule rate is circular (DPO optimizes it); see unoptimized metrics",
            "max_new": args.max_new,
            "sft_eot_rate": sft_eot / max(len(sft_texts), 1),

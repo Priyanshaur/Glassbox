@@ -555,3 +555,30 @@ def test_win_rate_graded_score_and_smoke(tmp_path, monkeypatch):
     # identical weights + identical seeds -> identical completions -> all ties
     assert rep["ties"] == rep["n"] and rep["wins"] == rep["losses"] == 0
     assert 0.0 <= rep["sft_eot_rate"] <= 1.0 and "dpo_valid_rate" in rep
+    # validity is reported per arm, apart from the win rate; ties are split
+    assert 0.0 <= rep["sft_valid_rate"] <= 1.0 and 0.0 <= rep["dpo_valid_rate"] <= 1.0
+    assert rep["ties"] == rep["ties_both_invalid"] + rep["ties_equal_valid"]
+    assert rep["n_evaluated"] == rep["wins"] + rep["ties"] + rep["losses"]
+    assert rep["win_rate_all_pairs"] == 0.0 and "tie = equal" in rep["tie_rule"]
+
+
+def test_win_rate_ties_and_validity_accounting():
+    """How ties are counted: equal graded score is a tie (both invalid, or
+    both valid with equal coverage); validity vs coverage decide the rest;
+    ties never enter win_rate_decided or its Wilson interval."""
+    from bench.win_rate import pair_outcome, wilson
+    assert pair_outcome(-1, -1) == ("tie", "both_invalid")
+    assert pair_outcome(2, 2) == ("tie", "equal_valid")
+    assert pair_outcome(0, 0) == ("tie", "equal_valid")      # valid, no keywords
+    assert pair_outcome(-1, 0) == ("win", "validity")        # dpo valid, sft not
+    assert pair_outcome(1, -1) == ("loss", "validity")
+    assert pair_outcome(1, 3) == ("win", "coverage")
+    assert pair_outcome(3, 2) == ("loss", "coverage")
+    # 3 wins, 1 loss and 6 ties: decided win rate is 3/4, not 3/10
+    scores = [(-1, -1), (2, 2), (0, 0), (-1, -1), (2, 2), (1, 1),
+              (0, 2), (1, 2), (-1, 1), (3, 1)]
+    outs = [pair_outcome(a, b)[0] for a, b in scores]
+    w, l, t = outs.count("win"), outs.count("loss"), outs.count("tie")
+    assert (w, l, t) == (3, 1, 6)
+    assert w / (w + l) == 0.75 and w / len(outs) == 0.3
+    assert wilson(w, w + l) == wilson(3, 4)
