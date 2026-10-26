@@ -78,6 +78,20 @@ so a dead Kaggle session resumes with a continuous loss curve. See `docs/decisio
   runs, which also use different held-out prompt splits.
 - **No human evaluation yet.** The blind spot-check in `docs/human_spotcheck.md`
   has not been rated.
+- **The training corpus is partly garbled (mojibake).** In the Hub's parquet
+  version of TinyStories (what the default loader and `data/prepare.py` read),
+  UTF-8 curly quotes and dashes were decoded as cp1252: a right single quote
+  (U+2019) appears as U+00E2 U+20AC U+2122, and the closing double quote loses a
+  byte. 5.4% of stories in the local 1,000-story smoke shard contain the garbled
+  apostrophe and none contain a correct one; streaming 3,000 stories per split
+  from the Hub gives 4.9% (train) and 3.7% (validation). The original raw `.txt`
+  files are clean, so the defect is in the parquet files, not in `prepare.py`
+  (`docs/source_mojibake_check.md`). The model reproduces it: 1.7% (SFT) and
+  3.3% / 2.3% (DPO seeds 0 / 1) of samples contain the garbled apostrophe. The
+  whole-word scorer can undercount a keyword next to these characters (U+00E2 is
+  a word character), but re-scoring with the apostrophe folded back changed 0
+  of 1,800 samples (1 when every garbled sequence is folded), so the reported
+  coverage is unaffected here (`docs/results_folded.md`).
 
 ## DPO learning rate
 
