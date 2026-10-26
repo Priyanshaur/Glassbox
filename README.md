@@ -84,7 +84,8 @@ so a dead Kaggle session resumes with a continuous loss curve. See `docs/decisio
   (U+2019) appears as U+00E2 U+20AC U+2122, and the closing double quote loses a
   byte. 5.4% of stories in the local 1,000-story smoke shard contain the garbled
   apostrophe and none contain a correct one; streaming 3,000 stories per split
-  from the Hub gives 4.9% (train) and 3.7% (validation). The original raw `.txt`
+  from the Hub gives about 4-5% of stories (4.9% train, 3.7% validation, so
+  approximate). The original raw `.txt`
   files are clean, so the defect is in the parquet files, not in `prepare.py`
   (`docs/source_mojibake_check.md`). The model reproduces it: 1.7% (SFT) and
   3.3% / 2.3% (DPO seeds 0 / 1) of samples contain the garbled apostrophe. The
