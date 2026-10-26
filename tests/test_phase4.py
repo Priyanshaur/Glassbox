@@ -1,5 +1,6 @@
 """Phase 4 tests: boundaries, masking, pairing, DPO math, CPU smokes."""
 import math
+import os
 from unittest import mock
 
 import torch
@@ -375,3 +376,113 @@ def test_dpo_exit_paths_and_resume(tmp_path, monkeypatch):
     rows = [json.loads(l) for l in
             open(tmp_path / "ck" / "metrics_dpo.jsonl", encoding="utf-8")]
     assert any("h_loss" in r for r in rows)
+
+
+def _dpo_cut_vs_full(tmp_path, monkeypatch, pairs, patience, cut_seconds):
+    """Run train.dpo twice on the debug config: once uninterrupted ('full'),
+    once cut by max_hours (a fake clock, +1s per call, so the cut lands at a
+    fixed update) and then resumed ('cut'). Returns (full_rows, cut_rows_at_cut,
+    cut_rows_final, full_ckpt, cut_ckpt)."""
+    import json
+    import sys
+    from train import checkpoint as ckpt_mod
+    from train import dpo
+    cfg = load_config("configs/debug_cpu.yaml")["model"]
+    torch.manual_seed(0)
+    torch.save(GPT(cfg).state_dict(), tmp_path / "init.pt")
+    with open(tmp_path / "pairs.jsonl", "w", encoding="utf-8") as f:
+        for p in pairs:
+            f.write(json.dumps(p) + "\n")
+
+    def run(ckpt, *extra):
+        argv = ["dpo", "--config", "configs/debug_cpu.yaml",
+                "--init_policy", str(tmp_path / "init.pt"),
+                "--pairs", str(tmp_path / "pairs.jsonl"),
+                "--ckpt_dir", str(tmp_path / ckpt), "--batch", "2",
+                "--eval_every", "10", "--heldout_frac", "0.2", "--lr", "1e-4",
+                "--epochs", "3", "--patience", str(patience), *extra]
+        monkeypatch.setattr(sys, "argv", argv)
+        return dpo.main()
+
+    def rows(ckpt):
+        with open(tmp_path / ckpt / "metrics_dpo.jsonl", encoding="utf-8") as f:
+            return [json.loads(l) for l in f if l.strip()]
+
+    class Clock:
+        def __init__(self):
+            self.t = 0.0
+
+        def __call__(self):
+            self.t += 1.0
+            return self.t
+
+    assert run("full") == 0
+    with monkeypatch.context() as m:
+        m.setattr(dpo.time, "perf_counter", Clock())
+        assert run("cut", "--resume", "latest",
+                   "--max_hours", f"{cut_seconds / 3600}") == 0
+    at_cut = rows("cut")
+    assert run("cut", "--resume", "latest") == 0
+    return (rows("full"), at_cut, rows("cut"),
+            ckpt_mod.latest_checkpoint(str(tmp_path / "full")),
+            ckpt_mod.latest_checkpoint(str(tmp_path / "cut")))
+
+
+def _ev(rows):
+    return {r["step"]: r["h_loss"] for r in rows if "h_loss" in r}
+
+
+def _same_final_weights(fa, fb):
+    assert os.path.basename(fa) == os.path.basename(fb)
+    sa = torch.load(fa, weights_only=False)["model"]
+    sb = torch.load(fb, weights_only=False)["model"]
+    assert all(torch.equal(sa[k], sb[k]) for k in sa)
+
+
+def test_dpo_max_hours_resume_is_identical_to_uninterrupted(tmp_path, monkeypatch):
+    """A run cut by max_hours then resumed must end identical to one
+    uninterrupted run: held-out losses, best loss, final checkpoint weights,
+    and a terminal row naming why each segment stopped."""
+    pairs = [{"prompt": P + f" {i}", "winner": W, "loser": L} for i in range(30)]
+    full, at_cut, cut, fa, fb = _dpo_cut_vs_full(
+        tmp_path, monkeypatch, pairs, patience=99, cut_seconds=40)
+    assert at_cut[-1]["terminal"] == "max_hours"
+    assert 0 < at_cut[-1]["updates_done"] < full[-1]["updates_done"]
+    assert full[-1]["terminal"] == cut[-1]["terminal"] == "epochs"
+    assert full[0].get("pre_update") and abs(full[0]["h0_loss"] - math.log(2)) < 1e-6
+    assert abs(full[-1]["best_h_loss"] - cut[-1]["best_h_loss"]) < 1e-6
+    assert _ev(full).keys() == _ev(cut).keys()
+    for k, v in _ev(full).items():
+        assert abs(v - _ev(cut)[k]) < 1e-6, k
+    _same_final_weights(fa, fb)
+
+
+def test_dpo_resume_between_best_and_stale_evals_keeps_patience(tmp_path, monkeypatch):
+    """F1 guard with patience=2. Held-out prompts get REVERSED preferences, so
+    held-out loss is best at the step-0 eval and rises afterwards (stale at
+    steps 10 and 20). The cut falls after the first stale eval (step 10) and
+    before the second (step 20); the resume restarts from the step-0
+    checkpoint and replays both stale evals. It must early-stop at the SAME
+    step with the SAME best loss and weights as an uninterrupted run -- the
+    bug being guarded: pre-counting the stale eval already on disk, which
+    double-counts after the replay and stops at step 10 instead."""
+    from train.dpo import split_holdout
+    pairs = [{"prompt": P + f" {i}", "winner": W, "loser": L} for i in range(60)]
+    _, hold = split_holdout(pairs, 0.2, 0)
+    held = {p["prompt"] for p in hold}
+    pairs = [({"prompt": p["prompt"], "winner": L, "loser": W}
+              if p["prompt"] in held else p) for p in pairs]
+    full, at_cut, cut, fa, fb = _dpo_cut_vs_full(
+        tmp_path, monkeypatch, pairs, patience=2, cut_seconds=49)
+    assert sorted(_ev(full)) == [0, 10, 20], sorted(_ev(full))  # scenario holds
+    assert _ev(full)[0] < _ev(full)[10] and _ev(full)[0] < _ev(full)[20]
+    assert full[-1]["terminal"] == "early_stop"
+    assert sorted(_ev(at_cut)) == [0, 10]                # cut between the evals
+    assert at_cut[-1]["terminal"] == "max_hours"
+    assert 10 < at_cut[-1]["updates_done"] <= 20
+    assert cut[-1]["terminal"] == "early_stop"
+    assert cut[-1]["updates_done"] == full[-1]["updates_done"]
+    assert abs(full[-1]["best_h_loss"] - cut[-1]["best_h_loss"]) < 1e-6
+    for k, v in _ev(full).items():
+        assert abs(v - _ev(cut)[k]) < 1e-6, k
+    _same_final_weights(fa, fb)
