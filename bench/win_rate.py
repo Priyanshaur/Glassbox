@@ -78,7 +78,7 @@ def main():
     val_texts = docs_from_shard(tok, cfg["data"]["out_dir"], "validation")
     prompts = []
     for i, t in enumerate(val_texts):
-        sp = synth_prompt(t, 10_000 + i)
+        sp = synth_prompt(t, i)  # val story idx, same keying as eval_quality
         if sp is not None:
             prompts.append((sp[0], sp[1], t))  # keep source story for val ppl
         if len(prompts) >= args.n_prompts:
