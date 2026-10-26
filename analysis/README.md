@@ -7,6 +7,8 @@ CPU only, no GPU, no model.
 |---|---|
 | `finished_only.py` | `docs/results_final.md`: headline DPO-minus-SFT table, finished-only coverage with prompt-bootstrap CIs, finished vs unfinished length tables |
 | `make_spotcheck.py` | `docs/human_spotcheck.md` (20 blind, shuffled SFT-vs-DPO pairs, ratings blank) and a key file mapping A/B to the model |
+| `rescore_folded.py` | `docs/results_folded.md`: coverage re-scored with the garbled apostrophe (and, as an extra, all garbled sequences) folded back, original numbers alongside, DPO-minus-SFT CIs |
+| `check_source_mojibake.py` | `docs/source_mojibake_check.md`: counts the garbled sequence in the Hub's streamed text and compares it with the original raw `.txt` file. **Needs network access** and takes no kernel input |
 
 ## Inputs
 
@@ -24,6 +26,8 @@ kaggle kernels output priyanshgaur/glassbox-dpo/3 -p final_v3 --file-pattern "fi
 ```bash
 python analysis/finished_only.py final_v3 docs/results_final.md
 python analysis/make_spotcheck.py final_v3 docs/human_spotcheck.md checkpoints/human_spotcheck_key.json
+python analysis/rescore_folded.py final_v3 docs/results_folded.md
+python analysis/check_source_mojibake.py 3000 docs/source_mojibake_check.md   # network
 ```
 
 Notes:
