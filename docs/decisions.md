@@ -249,3 +249,39 @@ If retraining (all of the following would be redone; nothing here is applied):
 5. Caveat: do not repair the existing text with a cp1252 round trip
    (`text.encode("cp1252").decode("utf-8")`). The closing double quote U+201D lost
    its third byte, and the repair fails or corrupts those stories.
+
+## sample_completions re-feeds the last prompt token (found 2026-10-28) - NOT fixed
+
+Found while building the Phase 5 engine (parity test against the old sampler).
+`train/sample.py::sample_completions` prefills the prompt, then its first decode
+step feeds `ids[:, -1:]` (the LAST PROMPT TOKEN) again at `pos_offset = P-1`. That
+token's K/V are therefore in the cache twice (cache length P+1 after the first
+step) and stay there for the whole generation. The first next-token distribution
+differs slightly from the model's true one: on the SFT model with the template
+prompt the total variation distance is 0.047 and the largest logit difference is
+1.16; over 60 sampled tokens only 4 of 12 rows were identical between the old
+behaviour and the correct one.
+
+What it affects (everything sampled with `sample_completions`): the preference
+pairs (`train/pairs.py` via `build_pairs_graded`), `train/eval_quality.py` (the
+probe and final-run generation metrics: coverage, `eot_rate`, validity, length),
+`bench/win_rate.py`, the sampled stories in the human spot-check, and the
+numbers in `docs/results_final.md`, `docs/results_folded.md` and
+`docs/quantization_results.md`'s older SFT references derived from sampling.
+
+What it does NOT affect: the DPO training loss and the held-out DPO losses (full
+forward passes over winner/loser in `response_logps`), SFT and pretraining
+training, gold-story perplexity (teacher-forced), the int8 perplexity gate, and
+`sample_continuations` (no cache).
+
+SFT-vs-DPO comparisons used the same sampler, the same prompts and the same
+per-prompt seeds for both models, so both carry the same quirk. The comparisons
+are consistent with each other, but the absolute `eot_rate` / coverage values come
+from a slightly distorted sampling distribution, and the effect on the size of the
+DPO-minus-SFT differences was not measured.
+
+Not changed: the old sampler is untouched and no evaluation was re-run. The new
+engine (`inference/generate.py`) takes the first token's logits straight from the
+prefill (correct); `replay_last_prompt_token=True` reproduces the old behaviour
+for parity tests. Proposal, not applied: fix the sampler (or route it through the
+engine) and re-run the generation evals as a corrected re-evaluation.
