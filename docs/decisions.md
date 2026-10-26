@@ -266,8 +266,9 @@ What it affects (everything sampled with `sample_completions`): the preference
 pairs (`train/pairs.py` via `build_pairs_graded`), `train/eval_quality.py` (the
 probe and final-run generation metrics: coverage, `eot_rate`, validity, length),
 `bench/win_rate.py`, the sampled stories in the human spot-check, and the
-numbers in `docs/results_final.md`, `docs/results_folded.md` and
-`docs/quantization_results.md`'s older SFT references derived from sampling.
+generation numbers in `docs/results_final.md` and `docs/results_folded.md`. (The
+Phase 5 quantization generation check in `docs/quantization_results.md` used the
+new engine in its correct mode, so it is not affected.)
 
 What it does NOT affect: the DPO training loss and the held-out DPO losses (full
 forward passes over winner/loser in `response_logps`), SFT and pretraining
