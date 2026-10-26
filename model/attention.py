@@ -115,7 +115,10 @@ class Attention(nn.Module):
         pos = torch.arange(pos_offset, pos_offset + T)
         cos, sin = rope_cos_sin(pos, D, device=x.device)
         q, k_new = apply_rope(q, cos, sin), apply_rope(k_new, cos, sin)
-        if past_kv is not None:
+        if past_kv is not None and hasattr(past_kv, "update"):
+            # Static cache (inference/kv_cache.py): in-place write, views back.
+            k_full, v_full, cache_len = past_kv.update(k_new, v_new)
+        elif past_kv is not None:
             pk, pv = past_kv
             k_full = torch.cat([pk, k_new], dim=2)
             v_full = torch.cat([pv, v_new], dim=2)
