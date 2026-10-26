@@ -13,9 +13,21 @@ probe: max_new=256, temp=0.8, top_k=40):
                 NLL, exp) -- always scored by --ppl_weights (the frozen SFT
                 ref), so arms are compared under a fixed scorer.
 
-Prompts come from the VALIDATION split (never trained on), synth_prompt on
-val story idx 0..N-1. Seeds key on prompt idx so every arm draws the same
-randomness (comparable generations). One JSON row per prompt + a summary.
+  gold_ppl      perplexity of the GOLD validation story under the model being
+                tested (response tokens only). Unlike ppl_sft this is not a
+                model scoring its own samples, so the SFT baseline and the DPO
+                arm are compared on equal terms.
+
+ppl_sft caveat: the SFT arm's samples are scored by the SFT model itself at
+temp 0.8 / top-k 40, which flatters it by construction. Read gold_ppl for
+fluency; keep ppl_sft only as a drift check of DPO samples under the SFT ref.
+
+Prompts come from the VALIDATION split (never trained on) and use a
+STOPWORD-FILTERED keyword draw (eval_prompt): the shared synth_prompt would
+sometimes ask for words like "that" or "with", which any story contains. SFT
+and pair data keep synth_prompt untouched. Seeds key on the val story idx
+0..N-1 so every arm draws the same randomness (comparable generations). One
+JSON row per prompt + a summary.
 """
 import argparse
 import json
@@ -25,15 +37,41 @@ import sys
 import time
 
 sys.path.insert(0, ".")
+import numpy as np
 import torch
 import torch.nn.functional as F
 
 from common.config import load_config
 from model.gpt import GPT
 from tokenizer.bpe import BPETokenizer, EOT_ID
-from train.instruct import synth_prompt, iter_shard_texts
+from train.instruct import SALT, TMPL, content_words, iter_shard_texts
 from train.pairs import whole_word_count
 from train.sample import sample_completions
+
+
+# Function words of >= 4 letters (content_words keeps every word that long).
+# Eval prompts only: a stopword keyword is "covered" by any story, so it adds
+# no signal to the coverage metrics.
+STOPWORDS = frozenset("""
+    about after again also always another around because been before being
+    could does down each even ever every from have here into just know like
+    made make many more most much never only other over said same should
+    since some still such take than that their them then there these they
+    thing things this those through under very want well were what when
+    where which while will with would your once upon came went back
+""".split())
+
+
+def eval_prompt(text, idx, n_words=3):
+    """(prompt, keywords) with stopword-free keywords, or None if the story
+    has fewer than n_words of them. Same template, rng and salt scheme as
+    train.instruct.synth_prompt, only the candidate pool differs."""
+    words = [w for w in content_words(text) if w not in STOPWORDS]
+    if len(words) < n_words:
+        return None
+    rng = np.random.default_rng(np.random.SeedSequence([SALT, idx]))
+    kw = sorted(rng.choice(words, size=n_words, replace=False).tolist())
+    return TMPL.format(words=", ".join(kw)), kw
 
 
 @torch.no_grad()
@@ -95,9 +133,9 @@ def main():
     # val-split template prompts (validation split never trained on)
     prompts, idx = [], 0
     for text in iter_shard_texts(tok, cfg["data"]["out_dir"], "validation"):
-        sp = synth_prompt(text, idx)
+        sp = eval_prompt(text, idx)
         if sp is not None:
-            prompts.append((idx, sp[0], sp[1]))
+            prompts.append((idx, sp[0], sp[1], text))
         idx += 1
         if len(prompts) >= args.n_prompts:
             break
@@ -106,8 +144,12 @@ def main():
 
     t0 = time.time()
     all_prose, sum_cov, n_full3, n_eot, n_words, nll_sum, tok_sum = [], 0, 0, 0, 0, 0.0, 0
+    gold_nll_sum, gold_tok_sum = 0.0, 0
     with open(args.out, "w", encoding="utf-8") as f:
-        for k, (i, prompt, kw) in enumerate(prompts, 1):
+        for k, (i, prompt, kw, gold) in enumerate(prompts, 1):
+            gn, gt = mean_nll(model, tok, prompt, gold, ctx, device)
+            gold_nll_sum += gn * gt
+            gold_tok_sum += gt
             texts, flags = sample_completions(
                 model, tok, prompt, n=args.n_samples, max_new=args.max_new,
                 temperature=args.temperature, top_k=args.top_k,
@@ -140,6 +182,8 @@ def main():
         "cov3": sum_cov / n, "full3_rate": n_full3 / n, "eot_rate": n_eot / n,
         "mean_words": n_words / n, "distinct2": distinct2(all_prose),
         "ppl_sft": math.exp(nll_sum / tok_sum) if tok_sum else float("inf"),
+        "gold_ppl": (math.exp(gold_nll_sum / gold_tok_sum)
+                     if gold_tok_sum else float("inf")),
         "seconds": round(time.time() - t0, 1),
     }
     with open(args.out + ".summary.json", "w", encoding="utf-8") as f:

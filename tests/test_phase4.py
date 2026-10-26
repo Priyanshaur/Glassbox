@@ -486,3 +486,41 @@ def test_dpo_resume_between_best_and_stale_evals_keeps_patience(tmp_path, monkey
     for k, v in _ev(full).items():
         assert abs(v - _ev(cut)[k]) < 1e-6, k
     _same_final_weights(fa, fb)
+
+
+def test_eval_prompt_is_stopword_free_and_deterministic():
+    from train.eval_quality import STOPWORDS, eval_prompt
+    from train.instruct import docs_from_shard
+    texts = docs_from_shard(tok(), "data", "validation")[:60]
+    got = 0
+    for i, t in enumerate(texts):
+        a, b = eval_prompt(t, i), eval_prompt(t, i)
+        assert a == b
+        if a is None:
+            continue
+        got += 1
+        assert len(a[1]) == 3 and not set(a[1]) & STOPWORDS
+        assert all(k in t.lower() for k in a[1])
+        assert a[0].startswith("Write a short story using all of these words:")
+    assert got >= 30
+    assert all(len(w) >= 4 for w in STOPWORDS)
+
+
+def test_eval_quality_smoke_reports_gold_ppl(tmp_path, monkeypatch):
+    """eval_quality end to end on the debug model (CPU, a few prompts)."""
+    import json
+    import sys
+    from train import eval_quality
+    cfg = load_config("configs/debug_cpu.yaml")["model"]
+    torch.manual_seed(0)
+    torch.save(GPT(cfg).state_dict(), tmp_path / "w.pt")
+    out = tmp_path / "eval.jsonl"
+    monkeypatch.setattr(sys, "argv", [
+        "eval_quality", "--config", "configs/debug_cpu.yaml",
+        "--weights", str(tmp_path / "w.pt"),
+        "--ppl_weights", str(tmp_path / "w.pt"), "--out", str(out),
+        "--n_prompts", "3", "--n_samples", "2", "--max_new", "8"])
+    assert eval_quality.main() == 0
+    s = json.load(open(str(out) + ".summary.json", encoding="utf-8"))
+    assert s["n_prompts"] == 3 and math.isfinite(s["gold_ppl"])
+    assert s["gold_ppl"] > 1 and math.isfinite(s["ppl_sft"])
