@@ -93,6 +93,15 @@ so a dead Kaggle session resumes with a continuous loss curve. See `docs/decisio
   a word character), but re-scoring with the apostrophe folded back changed 0
   of 1,800 samples (1 when every garbled sequence is folded), so the reported
   coverage is unaffected here (`docs/results_folded.md`).
+- **The old sampler re-feeds the last prompt token.** `train/sample.py::sample_completions`
+  caches the last prompt token twice, which shifts the first next-token
+  distribution slightly (total variation 0.047 on the SFT template prompt). It
+  affects every generation made with it: the preference pairs, `eval_quality`
+  and `win_rate` generation metrics, the final-run results and the spot-check
+  samples. It does not affect DPO training or held-out losses, SFT/pretraining,
+  or perplexity. SFT and DPO were sampled the same way, so their comparison is
+  consistent, but absolute `eot_rate` / coverage values are slightly off. Not
+  fixed and not re-evaluated yet (see `docs/decisions.md`).
 
 ## DPO learning rate
 
