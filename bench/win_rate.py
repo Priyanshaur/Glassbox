@@ -1,8 +1,12 @@
 """DPO vs SFT win rate + unoptimized quality metrics + blind spot-check CSV.
 
 Eval prompts: official validation split (pretraining saw all of train).
-Per prompt: one completion per model, identical decoding. Rule verdict per
-completion -> wins (dpo pass, sft fail) / ties / losses, Wilson 95% CI on
+Per prompt: one completion per model, identical decoding (max_new=256 by
+default so stories can reach their EOT). Each completion is scored with the
+SAME graded rule the DPO pairs were built with (train.pairs): it is VALID iff
+it ended at its own EOT and has 10-500 words; a valid completion scores its
+whole-word keyword coverage (0..3), an invalid one scores -1. DPO wins when
+its score is higher, loses when lower, ties when equal; Wilson 95% CI on
 DECIDED pairs only. The rule win rate is CIRCULAR (DPO optimizes it), so we
 also report what DPO did not optimize: response-token val perplexity,
 distinct-2, mean length. Plus a blind shuffled CSV for the human spot-check
@@ -20,7 +24,8 @@ import torch
 from common.config import load_config
 from model.gpt import GPT
 from tokenizer.bpe import BPETokenizer
-from train.instruct import build_sft_example, check_criterion, docs_from_shard, synth_prompt
+from train.instruct import build_sft_example, docs_from_shard, synth_prompt
+from train.pairs import whole_word_count
 from train.sample import prompt_ids, sample_completions
 from train.sft import response_loss
 
@@ -34,6 +39,14 @@ def wilson(wins, n, z=1.96):
     c = p + z * z / (2 * n)
     m = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n))
     return max(c - m, 0) / d, min(c + m, 1) / d
+
+
+def graded_score(text, keywords, eot_hit):
+    """Same eligibility as train.pairs.make_graded_pairs: ended at its own EOT
+    and 10-500 words. Valid -> whole-word keyword coverage; invalid -> -1."""
+    if not eot_hit or not 10 <= len(text.split()) <= 500:
+        return -1
+    return whole_word_count(text, keywords)
 
 
 def distinct_2(texts):
@@ -52,7 +65,7 @@ def main():
     ap.add_argument("--sft_weights", required=True)
     ap.add_argument("--dpo_weights", required=True)
     ap.add_argument("--n_prompts", type=int, default=200)
-    ap.add_argument("--max_new", type=int, default=64)
+    ap.add_argument("--max_new", type=int, default=256)
     ap.add_argument("--out", default="bench/win_rate.json")
     ap.add_argument("--emit_spotcheck", type=int, default=0)
     ap.add_argument("--seed", type=int, default=0)
@@ -80,24 +93,34 @@ def main():
 
     wins = ties = losses = skipped = 0
     sft_texts, dpo_texts, rows = [], [], []
+    sft_sc, dpo_sc, sft_eot, dpo_eot = [], [], 0, 0
     for i, (prompt, kw, _src) in enumerate(prompts):
         plen = len(prompt_ids(tok, prompt))
         if plen + 8 > cfg["model"]["context_len"]:
             skipped += 1  # prompt alone nearly fills ctx; nothing to generate
             continue
         mn = min(args.max_new, cfg["model"]["context_len"] - plen - 1)
-        a = sample_completions(sft, tok, prompt, n=1, max_new=mn, seed=args.seed + i,
-                               device=device)[0]
-        b = sample_completions(dpo, tok, prompt, n=1, max_new=mn, seed=args.seed + i,
-                               device=device)[0]
+        ta, fa = sample_completions(sft, tok, prompt, n=1, max_new=mn,
+                                    seed=args.seed + i, device=device,
+                                    return_flags=True)
+        tb, fb = sample_completions(dpo, tok, prompt, n=1, max_new=mn,
+                                    seed=args.seed + i, device=device,
+                                    return_flags=True)
+        a, b = ta[0], tb[0]
         sft_texts.append(a)
         dpo_texts.append(b)
-        pa, pb = check_criterion(a, kw)["ok"], check_criterion(b, kw)["ok"]
-        outcome = "tie" if pa == pb else ("win" if pb else "loss")
+        sa = graded_score(a, kw, fa[0]["eot_hit"])
+        sb = graded_score(b, kw, fb[0]["eot_hit"])
+        sft_sc.append(sa)
+        dpo_sc.append(sb)
+        sft_eot += fa[0]["eot_hit"]
+        dpo_eot += fb[0]["eot_hit"]
+        outcome = "tie" if sa == sb else ("win" if sb > sa else "loss")
         wins += outcome == "win"
         ties += outcome == "tie"
         losses += outcome == "loss"
-        rows.append({"prompt": prompt, "sft": a, "dpo": b, "outcome": outcome})
+        rows.append({"prompt": prompt, "sft": a, "dpo": b, "outcome": outcome,
+                     "sft_score": sa, "dpo_score": sb})
 
     decided = wins + losses
     lo, hi = wilson(wins, decided)
@@ -109,6 +132,11 @@ def main():
            "win_rate_decided": wins / max(decided, 1),
            "ci95": [lo, hi],
            "note": "rule rate is circular (DPO optimizes it); see unoptimized metrics",
+           "max_new": args.max_new,
+           "sft_eot_rate": sft_eot / max(len(sft_texts), 1),
+           "dpo_eot_rate": dpo_eot / max(len(dpo_texts), 1),
+           "sft_valid_rate": sum(x >= 0 for x in sft_sc) / max(len(sft_sc), 1),
+           "dpo_valid_rate": sum(x >= 0 for x in dpo_sc) / max(len(dpo_sc), 1),
            "sft_val_ppl": float(torch.exp(torch.tensor(response_loss(
                sft, val_ex, device, mcfg["vocab_size"])))),
            "dpo_val_ppl": float(torch.exp(torch.tensor(response_loss(
