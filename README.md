@@ -113,3 +113,25 @@ DPO raises keyword coverage (+0.8 of 3, 95% CIs exclude zero, both training
 seeds agree) and lowers `eot_rate` by 12-15 points, below the 85% guardrail.
 It is not an overall win. Details, finished-only coverage and length
 distributions: `docs/results_final.md`.
+
+## Inference (Phase 5): what was measured
+
+Code: `inference/kv_cache.py` (static preallocated KV cache), `inference/generate.py`
+(generation engine), `inference/quantize.py` (int8 weight-only, fp16). Results so
+far are CPU only (laptop, 6 threads, SFT checkpoint, fp32); no GPU numbers yet.
+Protocol and raw data: `docs/benchmark_protocol.md`, `docs/benchmark_cpu.md`,
+`docs/benchmark_cpu_notes.md`.
+
+- **A KV cache is much faster than recomputing**: 2.2-7.9x end-to-end in the cells
+  that were run.
+- **Static vs tuple (`torch.cat`) cache is a clear win only for long prompts and
+  n=32** (1.25-1.44x end-to-end). For short prompts at n=1 and n=8 there is **no
+  measurable difference** (the confidence intervals include 1; the n=1 cells are
+  noisier than the effect).
+- **Time to first token** is not improved by the static cache and is slightly worse
+  in a few cells. A likely cause is zero-filling the whole preallocated buffer
+  inside the timed window, but **that explanation is untested**.
+- **int8 weight-only's value is file size, not speed**: the file is 0.25x of fp32
+  (31.7 MB vs 125.9 MB) at +0.04% gold-story perplexity
+  (`docs/quantization_results.md`). It was 1.17-1.65x *slower* than fp32 on the CPU
+  (no fused int8 kernel).
