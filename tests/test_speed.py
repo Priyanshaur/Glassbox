@@ -37,3 +37,37 @@ def test_speed_smoke_debug_model(tmp_path):
     assert any(c["comparison"].startswith("static vs tuple") for c in r["comparisons"])
     md = open(out + ".md", encoding="utf-8").read()
     assert "Correctness gate" in md and "speedup" in md and "Environment" in md
+
+
+def test_speed_time_budget_models_filter_and_partial_dump(tmp_path):
+    """--budget_s stops after >= 2 repeats and says so; --models fp32 drops int8;
+    the per-repeat raw dump exists and the final dump replaces it."""
+    out = str(tmp_path / "b")
+    rc = speed.main(["--config", "configs/debug_cpu.yaml", "--weights", "none", "--prompts", "2",
+                     "--gen", "8", "--repeats", "4", "--warmup", "1", "--ns", "1",
+                     "--grid", "reduced", "--long_len", "16", "--models", "fp32",
+                     "--budget_s", "0.0001", "--out_prefix", out])
+    assert rc == 0
+    r = json.load(open(out + "_raw.json"))
+    assert "partial" not in r                                  # final dump replaced the partial one
+    assert r["params"]["repeats"] == 2 and r["params"]["repeats_requested"] == 4
+    names = r["raw_per_repeat_per_prompt_ttft_decode_s"]
+    assert not any("int8" in k or "fp16" in k for k in names)
+    assert all(len(v) == 2 for v in names.values())
+    assert "stopped by the time budget" in open(out + ".md", encoding="utf-8").read()
+
+
+def test_speed_fp16_path_exercised_on_cpu(tmp_path):
+    """The fp16 config (static cache, fp32 sampling of fp16 logits, informational gate,
+    fp16-vs-fp32 comparison) runs end to end; on a GPU it is the same code."""
+    out = str(tmp_path / "h")
+    rc = speed.main(["--config", "configs/debug_cpu.yaml", "--weights", "none", "--prompts", "2",
+                     "--gen", "8", "--repeats", "2", "--warmup", "1", "--ns", "1,2",
+                     "--grid", "reduced", "--long_len", "16", "--models", "fp32,fp16",
+                     "--allow_cpu_fp16", "--out_prefix", out])
+    assert rc == 0
+    r = json.load(open(out + "_raw.json"))
+    names = r["raw_per_repeat_per_prompt_ttft_decode_s"]
+    assert "fp16/static/n=1/short" in names and "fp16/static/n=2/long" in names
+    assert any(k.startswith("fp16|") for k in r["gate"]) and all(v["pass"] for v in r["gate"].values())
+    assert any(c["comparison"].startswith("fp16 static vs fp32 static") for c in r["comparisons"])

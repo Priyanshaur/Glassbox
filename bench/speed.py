@@ -58,7 +58,8 @@ def run_once(model, prompt_ids, n, G, cache, seed, dev):
     else:
         out = model(base)
         past = out.new_kvs if cache == "tuple" else None
-    nxt = Generator._sample(out.logits[:, -1, :], gen, TEMPERATURE, TOP_K, None)
+    # .float() is a no-op for fp32; fp16 logits are sampled in fp32 (same cost in every fp16 config)
+    nxt = Generator._sample(out.logits[:, -1, :].float(), gen, TEMPERATURE, TOP_K, None)
     sync(dev)
     t1 = time.perf_counter()
     cols, ids = [nxt], torch.cat([base, nxt], dim=1)
@@ -70,7 +71,7 @@ def run_once(model, prompt_ids, n, G, cache, seed, dev):
             past, logits = s.new_kvs, s.logits
         else:
             logits = model(ids).logits
-        nxt = Generator._sample(logits[:, -1, :], gen, TEMPERATURE, TOP_K, None)
+        nxt = Generator._sample(logits[:, -1, :].float(), gen, TEMPERATURE, TOP_K, None)
         cols.append(nxt)
         ids = torch.cat([ids, nxt], dim=1)
     sync(dev)
@@ -144,7 +145,7 @@ def build_configs(models, ns, grid, dev):
     for regime in ("short", "long"):
         for n in ns:
             for cache in ("none", "tuple", "static"):
-                if cache == "none" and grid == "cpu" and not (
+                if cache == "none" and grid in ("cpu", "reduced") and not (
                         (regime == "short" and n in (1, 8)) or (regime == "long" and n == 1)):
                     skipped.append((f"fp32/none/n={n}/{regime}", "estimated cost of hours on CPU"))
                     continue
@@ -171,9 +172,15 @@ def main(argv=None):
     ap.add_argument("--repeats", type=int, default=10)
     ap.add_argument("--warmup", type=int, default=3)
     ap.add_argument("--ns", default="1,8,32")
-    ap.add_argument("--grid", choices=["cpu", "full"], default="cpu")
+    ap.add_argument("--grid", choices=["cpu", "reduced", "full"], default="cpu")
     ap.add_argument("--long_len", type=int, default=256)
     ap.add_argument("--no_int8", action="store_true")
+    ap.add_argument("--allow_cpu_fp16", action="store_true",
+                    help="time the fp16 model on CPU too (only to exercise the code path in tests)")
+    ap.add_argument("--models", default="fp32,int8_all,fp16",
+                    help="which of fp32,int8_all,fp16 to time (fp32 is always loaded as the reference)")
+    ap.add_argument("--budget_s", type=float, default=0.0,
+                    help="stop starting new repeats after this many seconds (needs >= 2 repeats); 0 = off")
     ap.add_argument("--out_prefix", default="docs/benchmark_cpu")
     a = ap.parse_args(argv)
     dev = a.device
@@ -187,12 +194,14 @@ def main(argv=None):
     if a.weights != "none":
         fp32.load_state_dict(torch.load(a.weights, map_location="cpu", weights_only=True))
     fp32 = fp32.to(dev).eval()
+    wanted = set(a.models.split(","))
     models = {"fp32": fp32}
-    if not a.no_int8:
+    if not a.no_int8 and "int8_all" in wanted:
         models["int8_all"] = quantize_model(fp32.cpu(), True).to(dev)
         fp32.to(dev)
-    if dev == "cuda":
+    if (dev == "cuda" or a.allow_cpu_fp16) and "fp16" in wanted:
         models["fp16"] = to_half(fp32)
+    t_start = time.time()
     ns = [int(x) for x in a.ns.split(",")]
     K, G, R, W = a.prompts, a.gen, a.repeats, a.warmup
 
@@ -223,9 +232,14 @@ def main(argv=None):
         for n in ns:
             toks = {}
             for cache in ("static", "tuple", "none"):
-                if ("fp32", cache, n, regime) in cfgs:
+                if cache == "static" or ("fp32", cache, n, regime) in cfgs:
                     toks[cache] = run_once(fp32, pid, n, G, cache, seed, dev)[0]
             ref = toks["static"]
+            if ("fp16", "static", n, regime) in cfgs:   # exempt from equality: report agreement
+                h = run_once(models["fp16"], pid, n, G, "static", seed, dev)[0]
+                gate[("fp16", n, regime)] = {"pass": True, "detail": (
+                    f"token agreement with fp32 static {float((h == ref).float().mean()):.3f} "
+                    "(informational; numerics differ, equality not required)")}
             if regime == "short" and n == 1:      # the real engine must match the bench loop
                 eng = Generator(fp32, tok).generate(prompts["short"][0][2], n=1, max_new=G,
                                                     temperature=TEMPERATURE, top_k=TOP_K,
@@ -246,7 +260,7 @@ def main(argv=None):
                 if not ok:
                     dropped.add(("fp32", cache, n, regime))
     for k, v in gate.items():
-        if k[0] in ("tuple", "none", "engine"):
+        if k[0] in ("tuple", "none", "engine", "fp16"):
             log(f"gate {k}: {'PASS' if v['pass'] else 'FAIL'} - {v['detail']}")
     cfgs = [c for c in cfgs if c not in dropped]
 
@@ -274,13 +288,21 @@ def main(argv=None):
             peak[cname(c)] = max(peak.get(cname(c), 0), torch.cuda.max_memory_allocated())
         return per
 
+    completed = 0
     for rep in range(R):
+        if a.budget_s and completed >= 2 and time.time() - t_start > a.budget_s:
+            log(f"time budget {a.budget_s:.0f}s reached: stopping after {completed} of {R} repeats")
+            break
         order = list(cfgs)
         random.Random(1000 + rep).shuffle(order)
         for c in order:
             raw[cname(c)].append(one_repeat(c))
-        log(f"repeat {rep + 1}/{R} done")
+        completed = rep + 1
+        log(f"repeat {completed}/{R} done ({time.time() - t_start:.0f}s elapsed)")
+        json.dump({"partial": True, "repeats_completed": completed, "raw": raw},
+                  open(a.out_prefix + "_raw.json", "w"))
     rerun = {}
+    R = completed
     for c in cfgs:                               # protocol: re-run once if relative IQR > 20% (CPU)
         e2e = [np.mean([t + d for t, d in rp]) for rp in raw[cname(c)]]
         if dev == "cpu" and summarize(e2e)["rel_iqr"] > 0.20:
@@ -322,9 +344,10 @@ def main(argv=None):
             add(f"tuple vs none, n={n}, {regime}", ("fp32", "none", n, regime), ("fp32", "tuple", n, regime))
             add(f"static vs none, n={n}, {regime}", ("fp32", "none", n, regime), ("fp32", "static", n, regime))
             add(f"fp32 static vs int8 static, n={n}, {regime}", ("int8_all", "static", n, regime), ("fp32", "static", n, regime))
+            add(f"fp16 static vs fp32 static, n={n}, {regime}", ("fp32", "static", n, regime), ("fp16", "static", n, regime))
 
     env = environment(dev)
-    params = {"prompts": K, "gen": G, "repeats": R, "warmup": W, "ns": ns, "grid": a.grid,
+    params = {"prompts": K, "gen": G, "repeats": R, "repeats_requested": a.repeats, "warmup": W, "ns": ns, "grid": a.grid,
               "temperature": TEMPERATURE, "top_k": TOP_K, "long_len": a.long_len,
               "short_prompt_idx": [i for i, _, _ in short], "long_prompt_idx": [i for i, _, _ in long_],
               "short_prompt_tokens": [int(p.shape[1]) for _, p, _ in short],
@@ -343,7 +366,8 @@ def write_markdown(path, env, params, cfgs, rows, comps, gate, skipped, dropped,
     P = L.append
     P("# Inference benchmark results\n")
     P("Protocol: `docs/benchmark_protocol.md` (including its CPU addendum). Times are medians over "
-      f"{params['repeats']} interleaved repeats; spread = interquartile range (p25-p75). Raw "
+      f"{params['repeats']} interleaved repeats"
+      f"{' (requested ' + str(params['repeats_requested']) + ', stopped by the time budget)' if params['repeats'] != params['repeats_requested'] else ''}; spread = interquartile range (p25-p75). Raw "
       "per-repeat timings: the `_raw.json` next to this file.\n")
     P("## Environment and parameters\n")
     for k, v in env.items():
@@ -359,7 +383,7 @@ def write_markdown(path, env, params, cfgs, rows, comps, gate, skipped, dropped,
     P("| check | n | regime | result | detail |")
     P("|---|---|---|---|---|")
     for k, v in gate.items():
-        if k[0] in ("tuple", "none", "engine"):
+        if k[0] in ("tuple", "none", "engine", "fp16"):
             P(f"| {k[0]} | {k[1]} | {k[2]} | {'PASS' if v['pass'] else 'FAIL'} | {v['detail']} |")
     if dropped:
         P(f"\nDropped by the gate (not timed): {', '.join(sorted(cname(c) for c in dropped))}")
