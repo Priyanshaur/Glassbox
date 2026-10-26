@@ -524,3 +524,34 @@ def test_eval_quality_smoke_reports_gold_ppl(tmp_path, monkeypatch):
     s = json.load(open(str(out) + ".summary.json", encoding="utf-8"))
     assert s["n_prompts"] == 3 and math.isfinite(s["gold_ppl"])
     assert s["gold_ppl"] > 1 and math.isfinite(s["ppl_sft"])
+
+
+def test_win_rate_graded_score_and_smoke(tmp_path, monkeypatch):
+    """win_rate scores with the pair rule (EOT-ended, 10-500 words, whole-word
+    coverage) and runs end to end on the debug model."""
+    import json
+    import sys
+    from bench import win_rate
+    kw = ["dragon", "castle", "brave"]
+    story = ("The brave knight saw a dragon near the castle gates and "
+             "smiled at everyone there")
+    assert win_rate.graded_score(story, kw, True) == 3
+    assert win_rate.graded_score(story, kw, False) == -1        # no EOT
+    assert win_rate.graded_score("brave dragon", kw, True) == -1  # < 10 words
+    assert win_rate.graded_score("when " * 12, ["when"], True) == 1
+    assert win_rate.graded_score("whenever " * 12, ["when"], True) == 0  # whole word
+    cfg = load_config("configs/debug_cpu.yaml")["model"]
+    torch.manual_seed(0)
+    torch.save(GPT(cfg).state_dict(), tmp_path / "a.pt")
+    torch.save(GPT(cfg).state_dict(), tmp_path / "b.pt")
+    out = tmp_path / "wr.json"
+    monkeypatch.setattr(sys, "argv", [
+        "win_rate", "--config", "configs/debug_cpu.yaml",
+        "--sft_weights", str(tmp_path / "a.pt"),
+        "--dpo_weights", str(tmp_path / "b.pt"), "--n_prompts", "3",
+        "--max_new", "8", "--out", str(out), "--emit_spotcheck", "2"])
+    assert win_rate.main() == 0
+    rep = json.load(open(out, encoding="utf-8"))
+    # identical weights + identical seeds -> identical completions -> all ties
+    assert rep["ties"] == rep["n"] and rep["wins"] == rep["losses"] == 0
+    assert 0.0 <= rep["sft_eot_rate"] <= 1.0 and "dpo_valid_rate" in rep
