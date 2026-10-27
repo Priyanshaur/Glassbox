@@ -147,7 +147,9 @@ def build_configs(models, ns, grid, dev):
             for cache in ("none", "tuple", "static"):
                 if cache == "none" and grid in ("cpu", "reduced") and not (
                         (regime == "short" and n in (1, 8)) or (regime == "long" and n == 1)):
-                    skipped.append((f"fp32/none/n={n}/{regime}", "estimated cost of hours on CPU"))
+                    why = ("estimated cost of hours on CPU" if dev == "cpu" else
+                           "estimated cost too high for the kernel's time cap (tens of GPU minutes per config)")
+                    skipped.append((f"fp32/none/n={n}/{regime}", why))
                     continue
                 cfgs.append(("fp32", cache, n, regime))
             if "int8_all" in models:
