@@ -125,6 +125,17 @@ see `docs/server.md`). Protocol:
 separately: a laptop CPU and a Kaggle Tesla T4. All results are for this 31.5M
 parameter model, the SFT checkpoint, and **K=4 prompts per regime**.
 
+Server notes (`docs/server.md`):
+
+- **Built on Starlette directly, not FastAPI.** The development machine had FastAPI
+  0.115.6 installed next to Starlette 1.8.0, a pair that cannot construct an app. The
+  server needs only Starlette and pydantic, so `fastapi` was dropped from
+  `requirements.txt` and `starlette`, `pydantic` and `uvicorn` are pinned to the
+  versions the tests ran against.
+- **A timed-out request discards its partial output** (`/generate` returns just a 504).
+- **Requests are serialized** (one generation at a time, a bounded queue) and there is
+  **no authentication**: it binds to 127.0.0.1 by default and should stay there.
+
 ### Laptop CPU (fp32, 6 threads, G=64) - `docs/benchmark_cpu.md`, `docs/benchmark_cpu_notes.md`
 
 - **A KV cache is much faster than recomputing**: 2.2-7.9x end-to-end in the cells

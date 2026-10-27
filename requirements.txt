@@ -8,8 +8,14 @@ numpy>=2.1
 tqdm>=4.66
 pyyaml>=6.0.2
 pytest>=8.3
-fastapi>=0.115.0
-uvicorn>=0.30.6
+# Inference server (inference/server.py) is built on Starlette + pydantic directly, not
+# FastAPI: the machine it was developed on had FastAPI 0.115.6 next to Starlette 1.8.0,
+# which cannot construct an app. These are the versions the 117 tests ran against.
+# httpx is only needed by Starlette's TestClient in tests/test_server.py.
+starlette==1.8.0
+pydantic==2.10.4
+uvicorn==0.34.0
+httpx==0.27.2
 datasets>=3.0
 regex>=2024.11.6
 # Optional: uncomment to enable wandb logging
