@@ -18,12 +18,13 @@ startup, or loads an int8 file written by `inference.quantize.save_quantized`),
 
 ## Implementation note: Starlette, not FastAPI
 
-The development machine has FastAPI 0.115.6 installed next to Starlette 1.8.0, which
-cannot construct a FastAPI app (`Router.__init__() got an unexpected keyword argument
-'on_startup'`). FastAPI is a thin layer over Starlette and pydantic, so the server
-uses those two directly (request validation is still pydantic). `requirements.txt`
-still lists `fastapi`; a consistent `fastapi`/`starlette` pair would also work, but
-nothing here needs FastAPI itself.
+The server is built on Starlette directly (with pydantic for request validation), not
+on FastAPI. The development machine had FastAPI 0.115.6 installed next to Starlette
+1.8.0, a pair that cannot construct a FastAPI app (`Router.__init__() got an
+unexpected keyword argument 'on_startup'`). FastAPI is a thin layer over Starlette and
+pydantic and nothing here needs it, so `fastapi` was dropped from `requirements.txt`
+and the versions actually used are pinned there: `starlette==1.8.0`,
+`pydantic==2.10.4`, `uvicorn==0.34.0` (and `httpx==0.27.2` for the test client).
 
 ## Endpoints
 
@@ -69,7 +70,12 @@ Same fields without `n`. Server-Sent Events: `text` events (`{"text": ...}`), th
 - **Timeouts.** `--timeout` is wall-clock from admission, queue wait included. When it
   expires the request gets 504 and the generation is stopped cooperatively (checked
   after every token), so a slow call cannot hold the queue. A request still waiting is
-  cancelled before it starts.
+  cancelled before it starts. **A timed-out request discards its partial output**:
+  `/generate` returns only the 504 (a stream that has already sent text events ends
+  with an `error` event, or a `done` event with `finish_reason` `timeout`, after what
+  it sent).
+- **Serialization and access.** Requests are serialized (one generation at a time);
+  there is **no authentication**, so keep the server on loopback.
 - **Disconnects.** If a streaming client disconnects, the stream is cancelled and the
   generation stops at the next token.
 - **Binding and CORS.** Binds to `127.0.0.1`; starting on another host prints a warning
