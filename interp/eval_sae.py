@@ -70,6 +70,23 @@ def dead_fraction(model, sae, loader, layer, scale, tokens, ctx, seed=DEAD_SCAN_
     return {"dead_fraction": float(1 - fired.float().mean()), "scan_tokens": seen}
 
 
+@torch.no_grad()
+def fvu_by_position(sae, acts3, split=16, batch=8192):
+    """FVU for positions < split vs the rest, both against the global mean: (N, T, d) input."""
+    d = acts3.shape[-1]
+    mean = acts3.reshape(-1, d).mean(0)
+    out = {}
+    for name, sl in (("first_%d" % split, slice(0, split)), ("rest", slice(split, None))):
+        x = acts3[:, sl].reshape(-1, d)
+        err = var = 0.0
+        for i in range(0, x.shape[0], batch):
+            xb = x[i:i + batch]
+            err += float(((xb - sae(xb)[0]) ** 2).sum())
+            var += float(((xb - mean) ** 2).sum())
+        out[name] = err / var if var > 0 else float("nan")
+    return out
+
+
 # ---------------------------------------------------------------- CE with patched residual
 def _ce_sum(logits, targets, mask=None):
     ce = F.cross_entropy(logits.reshape(-1, logits.shape[-1]), targets.reshape(-1), reduction="none")
@@ -185,6 +202,7 @@ def evaluate(model, sae, scale, layer, val_loader, train_loader, ctx, tok=None, 
     inputs, targets = ids[:, :ctx], ids[:, 1:ctx + 1]
     acts = (A.record_windows(model, inputs, layer, chunk, device) * scale).reshape(-1, sae.d_in)
     rep = reconstruction_metrics(sae, acts)
+    rep["fvu_by_position"] = fvu_by_position(sae, acts.reshape(inputs.shape[0], inputs.shape[1], -1))
     rep.update(dead_fraction(model, sae, train_loader, layer, scale, dead_tokens, ctx, device=device))
     rep.update(ce_recovered(model, sae, layer, scale, inputs, targets, None, chunk, device))
     rep["eval_tokens"] = int(inputs.numel())
