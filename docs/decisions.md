@@ -286,3 +286,20 @@ engine (`inference/generate.py`) takes the first token's logits straight from th
 prefill (correct); `replay_last_prompt_token=True` reproduces the old behaviour
 for parity tests. Proposal, not applied: fix the sampler (or route it through the
 engine) and re-run the generation evals as a corrected re-evaluation.
+
+## Idea, NOT started: CUDA graphs / torch.compile for the decode step (2026-10-27)
+
+Why it came up: on the T4 the decode step is a flat ~10-11 ms for n=1, 8 and 32 and
+for the no-cache, tuple and static loops alike (`docs/benchmark_t4.md`). A step
+time that does not move with the batch size or the amount of work suggests the GPU
+is waiting on kernel launches / Python rather than computing. This is a hypothesis
+from the timings; it has **not been profiled**.
+
+Possible experiment, later and optional: (1) profile one decode step with
+`torch.profiler` and look for idle GPU gaps between kernels; (2) if confirmed,
+capture the single-token decode step in a CUDA graph (the static cache's fixed
+buffer addresses make this feasible) and/or try `torch.compile(mode="reduce-overhead")`;
+(3) compare step latency and tokens/s at n=1, 8, 32 with the same protocol, a
+pre-registered success rule, and a correctness gate (tokens identical to the eager
+static loop). Risks: capture constraints (fixed shapes, the position offset), graph
+memory, longer warm-up. Nothing here has been started and nothing depends on it.
