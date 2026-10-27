@@ -347,3 +347,39 @@ def test_real_sft_int8_file_is_about_a_quarter_the_size(tmp_path):
     p = str(tmp_path / "q.pt")
     save_quantized(qm, p)
     assert os.path.getsize(p) < 0.30 * os.path.getsize(SFT)
+
+
+# ---------------------------------------------------------------- M6 engine hooks
+def test_generate_should_stop_ends_early_and_reports_timing_meta():
+    g = Generator(debug_model(), tok())
+    seen = {"n": 0}
+
+    def stop():
+        seen["n"] += 1
+        return seen["n"] >= 3
+
+    r = g.generate(PROMPT, n=2, max_new=20, temperature=1.0, top_k=None, seed=2,
+                   stop_at_eot=False, should_stop=stop)
+    assert r.n_steps == 3 and r.meta["stopped"] is True
+    assert all(len(row) == 3 for row in r.new_ids)
+    full = g.generate(PROMPT, n=2, max_new=20, temperature=1.0, top_k=None, seed=2, stop_at_eot=False)
+    assert not full.meta["stopped"] and full.n_steps == 20
+    assert full.meta["ttft_s"] > 0 and full.meta["decode_s"] >= 0
+    assert [row[:3] for row in full.new_ids] == r.new_ids        # stopping early changes nothing before it
+
+
+def test_stream_should_stop_and_info_fields():
+    g = Generator(debug_model(), tok())
+    info = {}
+    pieces = list(g.stream(PROMPT, max_new=20, temperature=1.0, top_k=None, seed=3, info=info))
+    assert info["n_new"] >= 1 and info["ttft_s"] > 0 and not info["stopped"]
+    cut = {}
+    n = {"i": 0}
+
+    def stop():
+        n["i"] += 1
+        return n["i"] >= 2
+
+    list(g.stream(PROMPT, max_new=20, temperature=1.0, top_k=None, seed=3, should_stop=stop, info=cut))
+    assert cut["stopped"] is True and cut["n_new"] == 2
+    assert pieces                                               # the unstopped run produced text
