@@ -117,7 +117,10 @@ distributions: `docs/results_final.md`.
 ## Inference (Phase 5): what was measured
 
 Code: `inference/kv_cache.py` (static preallocated KV cache), `inference/generate.py`
-(generation engine), `inference/quantize.py` (int8 weight-only, fp16). Protocol:
+(generation engine), `inference/quantize.py` (int8 weight-only, fp16),
+`inference/server.py` (HTTP server: `/health`, `/generate`, `/generate/stream`;
+loopback-only by default, per-request timeout, bounded queue, no prompt logging;
+see `docs/server.md`). Protocol:
 `docs/benchmark_protocol.md`. Results come from two machines and should be read
 separately: a laptop CPU and a Kaggle Tesla T4. All results are for this 31.5M
 parameter model, the SFT checkpoint, and **K=4 prompts per regime**.
