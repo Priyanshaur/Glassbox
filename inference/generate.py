@@ -20,6 +20,7 @@ temperature, top-k mask via `logits < kth`, softmax, torch.multinomial with a
 device Generator seeded once), and rows that already hit EOT keep being sampled
 until every row is finished (so the RNG stream stays aligned across rows).
 """
+import time
 from dataclasses import dataclass, field
 
 import torch
@@ -98,38 +99,66 @@ class Generator:
 
     # ------------------------------------------------------------------ public API
     def generate(self, prompt, n=1, max_new=64, temperature=0.8, top_k=50, top_p=None,
-                 seed=0, stop_at_eot=True, replay_last_prompt_token=False):
+                 seed=0, stop_at_eot=True, replay_last_prompt_token=False, should_stop=None):
         """n completions of one prompt. stop_at_eot=False always runs exactly
-        max_new steps (fixed-length benchmarking)."""
-        cols, finished, steps = [], None, 0
+        max_new steps (fixed-length benchmarking). `should_stop` (a callable) is
+        checked after every sampled token; when it returns True generation ends
+        early (the server uses it for timeouts and cancellation) and
+        `meta["stopped"]` is True. `meta` also carries `ttft_s` (generation start to
+        the first sampled token: tokenization, cache allocation, prefill, first
+        sample) and `decode_s` (first token to last token)."""
+        cols, finished, steps, stopped = [], None, 0, False
+        t0 = time.perf_counter()
+        t_first = None
         for step, nxt, fin in self._iter(prompt, n, max_new, temperature, top_k, top_p, seed,
                                          stop_at_eot, replay_last_prompt_token):
+            if t_first is None:
+                t_first = time.perf_counter()
             cols.append(nxt)
             finished, steps = fin, step + 1
+            if should_stop is not None and should_stop():
+                stopped = True
+                break
+        t1 = time.perf_counter()
         new = torch.cat(cols, dim=1) if cols else torch.empty((n, 0), dtype=torch.long)
         rows = new.tolist()
         texts = [self.tok.decode(r).split(EOT)[0] for r in rows]
         return GenerationResult(texts=texts,
                                 eot_hit=[bool(f) for f in finished.tolist()] if cols else [False] * n,
                                 new_ids=rows, n_prompt=len(self.tok.encode(prompt)),
-                                n_steps=steps)
+                                n_steps=steps,
+                                meta={"ttft_s": (t_first - t0) if t_first is not None else None,
+                                      "decode_s": (t1 - t_first) if t_first is not None else 0.0,
+                                      "stopped": stopped})
 
-    def stream(self, prompt, max_new=64, temperature=0.8, top_k=50, top_p=None, seed=0):
+    def stream(self, prompt, max_new=64, temperature=0.8, top_k=50, top_p=None, seed=0,
+               should_stop=None, info=None):
         """Yield text pieces as they are generated (one sequence). Stops at EOT;
-        a piece is held back while it ends in an incomplete UTF-8 character."""
+        a piece is held back while it ends in an incomplete UTF-8 character.
+        `should_stop` is checked after every token (early end, `info["stopped"]`).
+        `info`, if given, is filled in: n_new (tokens sampled, EOT excluded), eot,
+        stopped, ttft_s."""
+        info = info if info is not None else {}
+        info.update(n_new=0, eot=False, stopped=False, ttft_s=None)
         ids, sent = [], ""
+        t0 = time.perf_counter()
         for _, nxt, fin in self._iter(prompt, 1, max_new, temperature, top_k, top_p, seed,
                                       True, False):
+            if info["ttft_s"] is None:
+                info["ttft_s"] = time.perf_counter() - t0
             tok_id = int(nxt[0, 0])
             if tok_id == EOT_ID:
+                info["eot"] = True
                 break
             ids.append(tok_id)
+            info["n_new"] = len(ids)
             text = self.tok.decode(ids)
-            if text.endswith("�"):
-                continue
-            if len(text) > len(sent):
+            if not text.endswith("�") and len(text) > len(sent):
                 yield text[len(sent):]
                 sent = text
+            if should_stop is not None and should_stop():
+                info["stopped"] = True
+                break
         final = self.tok.decode(ids)
         if len(final) > len(sent):
             yield final[len(sent):]
