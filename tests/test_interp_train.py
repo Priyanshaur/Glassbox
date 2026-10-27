@@ -36,7 +36,11 @@ def test_training_runs_improves_fvu_and_writes_checkpoint_and_terminal_row(tmp_p
     rows = metrics(tmp_path, "a")
     evals = [r["eval"] for r in rows if "eval" in r]
     assert len(evals) == 4 and evals[-1]["fvu"] < evals[0]["fvu"]
-    assert rows[-1]["terminal"] == "epochs" and rows[-1]["steps"] == 4 * (1024 // 256) == res["steps"]
+    assert BASE.steps_per_epoch == 3                          # 16 windows x 63 positions // 256
+    assert rows[-1]["terminal"] == "epochs" and rows[-1]["steps"] == 4 * BASE.steps_per_epoch == res["steps"]
+    stats = [r["epoch_stats"] for r in rows if "epoch_stats" in r]
+    assert len(stats) == 4 and all(s["train_tokens_per_s"] > 0 and s["extract_tokens_per_s"] > 0 for s in stats)
+    assert all("fvu_excl_pos0" in e for e in evals)
     sae, meta = load_sae(str(tmp_path / "a" / "sae_latest.pt"))
     assert meta["layer"] == 1 and meta["act_scale"] == res["scale"] and meta["epochs_done"] == 4
     assert torch.allclose(sae.W_dec.norm(dim=1), torch.ones(128), atol=1e-5)
@@ -52,7 +56,7 @@ def test_two_identical_runs_are_bit_identical(tmp_path):
 def test_resume_at_a_buffer_epoch_boundary_equals_an_uninterrupted_run(tmp_path):
     straight = run(tmp_path, BASE, "straight")["sae"]
     first = run(tmp_path, replace(BASE, stop_after_epoch=2), "cut")
-    assert first["terminal"] == "stop_after_epoch" and first["steps"] == 2 * 4
+    assert first["terminal"] == "stop_after_epoch" and first["steps"] == 2 * BASE.steps_per_epoch
     resumed = run(tmp_path, BASE, "cut")["sae"]              # same out_dir: resumes from ckpt.pt
     assert metrics(tmp_path, "cut")[-1]["terminal"] == "epochs"
     for (k, p), (_, q) in zip(straight.state_dict().items(), resumed.state_dict().items()):

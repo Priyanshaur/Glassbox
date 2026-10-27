@@ -55,14 +55,16 @@ def reconstruction_metrics(sae, acts, batch=8192):
 
 @torch.no_grad()
 def dead_fraction(model, sae, loader, layer, scale, tokens, ctx, seed=DEAD_SCAN_SEED, chunk=32,
-                  windows_per_round=64, device=None):
-    """Fraction of latents that never fire over `tokens` fresh train-distribution tokens."""
+                  windows_per_round=64, device=None, skip_first=1):
+    """Fraction of latents that never fire over `tokens` fresh train-distribution tokens.
+    Window position 0 is excluded by default (the SAE does not train on it, and counting its
+    outlier activations could keep otherwise unused latents "alive")."""
     device = device or next(model.parameters()).device
     fired = torch.zeros(sae.n_features, dtype=torch.bool, device=device)
     seen, rnd = 0, 0
     while seen < tokens:
         ids = A.draw_windows(loader, seed, rnd, windows_per_round, ctx)
-        acts = A.record_windows(model, ids, layer, chunk, device).reshape(-1, sae.d_in) * scale
+        acts = A.record_windows(model, ids, layer, chunk, device)[:, skip_first:].reshape(-1, sae.d_in) * scale
         for i in range(0, acts.shape[0], 8192):
             fired |= (sae.encode(acts[i:i + 8192])[0] > 0).any(0)
         seen += acts.shape[0]
@@ -76,7 +78,8 @@ def fvu_by_position(sae, acts3, split=16, batch=8192):
     d = acts3.shape[-1]
     mean = acts3.reshape(-1, d).mean(0)
     out = {}
-    for name, sl in (("first_%d" % split, slice(0, split)), ("rest", slice(split, None))):
+    for name, sl in (("pos0", slice(0, 1)), ("pos1_%d" % (split - 1), slice(1, split)),
+                     ("first_%d" % split, slice(0, split)), ("rest", slice(split, None))):
         x = acts3[:, sl].reshape(-1, d)
         err = var = 0.0
         for i in range(0, x.shape[0], batch):
@@ -97,16 +100,21 @@ def _ce_sum(logits, targets, mask=None):
 
 
 @torch.no_grad()
-def ce_recovered(model, sae, layer, scale, inputs, targets, masks=None, chunk=16, device=None):
+def ce_recovered(model, sae, layer, scale, inputs, targets, masks=None, chunk=16, device=None,
+                 patch_first=True):
     """CE with the clean model, with the SAE reconstruction patched in, and with the
     dataset-mean residual patched in; plus the recovered fraction.
-    inputs/targets: (N, T) ids; masks: optional (N, T) bool of positions that count."""
+    inputs/targets: (N, T) ids; masks: optional (N, T) bool of positions that count.
+    patch_first=False leaves window position 0 (the sink-like outlier the SAE does not train
+    on) unpatched in BOTH patched runs, and takes the mean residual over positions >= 1; the
+    pre-registered A4 uses the default (every position patched)."""
     device = device or next(model.parameters()).device
     # mean residual over the (counted) positions
     tot, n = torch.zeros(sae.d_in, device=device), 0
     for i in range(0, inputs.shape[0], chunk):
         r = model(inputs[i:i + chunk].to(device), record_layers=[layer]).recorded[layer]
         if masks is None:
+            r = r if patch_first else r[:, 1:]
             tot += r.reshape(-1, r.shape[-1]).sum(0)
             n += r.shape[0] * r.shape[1]
         else:
@@ -122,9 +130,13 @@ def ce_recovered(model, sae, layer, scale, inputs, targets, masks=None, chunk=16
         out = model(x, record_layers=[layer])
         r = out.recorded[layer]
         rec = sae(r * scale)[0] / scale
+        d_sae, d_abl = rec - r, mean_res.view(1, 1, -1) - r
+        if not patch_first:
+            d_sae, d_abl = d_sae.clone(), d_abl.clone()
+            d_sae[:, 0], d_abl[:, 0] = 0, 0
         for name, logits in (("clean", out.logits),
-                             ("sae", model(x, inject={layer: rec - r}).logits),
-                             ("ablate", model(x, inject={layer: mean_res.view(1, 1, -1) - r}).logits)):
+                             ("sae", model(x, inject={layer: d_sae}).logits),
+                             ("ablate", model(x, inject={layer: d_abl}).logits)):
             s, c = _ce_sum(logits, y, mk)
             sums[name][0] += s
             sums[name][1] += c
@@ -202,7 +214,14 @@ def evaluate(model, sae, scale, layer, val_loader, train_loader, ctx, tok=None, 
     inputs, targets = ids[:, :ctx], ids[:, 1:ctx + 1]
     acts = (A.record_windows(model, inputs, layer, chunk, device) * scale).reshape(-1, sae.d_in)
     rep = reconstruction_metrics(sae, acts)
-    rep["fvu_by_position"] = fvu_by_position(sae, acts.reshape(inputs.shape[0], inputs.shape[1], -1))
+    acts3 = acts.reshape(inputs.shape[0], inputs.shape[1], -1)
+    rep["fvu_by_position"] = fvu_by_position(sae, acts3)
+    ex = reconstruction_metrics(sae, acts3[:, 1:].reshape(-1, sae.d_in))
+    pos0 = ce_recovered(model, sae, layer, scale, inputs, targets, None, chunk, device, patch_first=False)
+    rep["excl_pos0"] = {"fvu": ex["fvu"], "l0": ex["l0"], "tokens": ex["tokens"],
+                        "ce_recovered_pos0_unpatched": pos0["ce_recovered"],
+                        "ce_sae_pos0_unpatched": pos0["ce_sae"], "ce_clean": pos0["ce_clean"],
+                        "ce_meanablate_pos0_unpatched": pos0["ce_meanablate"]}
     rep.update(dead_fraction(model, sae, train_loader, layer, scale, dead_tokens, ctx, device=device))
     rep.update(ce_recovered(model, sae, layer, scale, inputs, targets, None, chunk, device))
     rep["eval_tokens"] = int(inputs.numel())
@@ -215,6 +234,11 @@ def evaluate(model, sae, scale, layer, val_loader, train_loader, ctx, tok=None, 
                 **ce_recovered(sft_model, sae, layer, scale, ti, tt, tm, chunk, device)}
         rep["transfer"] = {"plain": plain, "template": temp}
     rep["verdict"] = verdict(rep)
+    e, T = rep["excl_pos0"], THRESHOLDS
+    # informational only: the pre-registered A1-A4 stay on every position (verdict above)
+    rep["verdict_excl_pos0"] = {"A1_fvu": e["fvu"] <= T["fvu_max"],
+                                "A2_l0": T["l0_min"] <= e["l0"] <= T["l0_max"],
+                                "A4_ce": e["ce_recovered_pos0_unpatched"] >= T["ce_recovered_min"]}
     return rep
 
 
