@@ -82,8 +82,12 @@ class GPT(nn.Module):
             x, kv = blk(x, pk, pos_offset, impl)
             if inject and i in inject:
                 v = inject[i]
-                # (d,) broadcast over batch+time, or exact (B,T,d).
-                x = x + (v.view(1, 1, -1) if v.dim() == 1 else v)
+                if callable(v):
+                    # delta computed from the residual itself (e.g. feature ablation)
+                    x = x + v(x)
+                else:
+                    # (d,) broadcast over batch+time, or exact (B,T,d).
+                    x = x + (v.view(1, 1, -1) if v.dim() == 1 else v)
             if i in rec:
                 recorded[i] = x.clone()
             new_kvs.append(kv)
