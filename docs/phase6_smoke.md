@@ -8,14 +8,14 @@ Goes through the real CLIs (`interp.train_sae`, `interp.eval_sae`). The model is
 
 | buffer epoch | val FVU | L0 | latents alive |
 |---|---|---|---|
-| 1 | 0.7593 | 4.00 | 1.000 |
-| 2 | 0.7332 | 4.00 | 1.000 |
-| 3 | 0.7116 | 4.00 | 1.000 |
-| 4 | 0.6943 | 4.00 | 1.000 |
-| 5 | 0.6841 | 4.00 | 1.000 |
-| 6 | 0.6795 | 4.00 | 1.000 |
+| 1 | 0.7677 | 4.00 | 1.000 |
+| 2 | 0.7464 | 4.00 | 1.000 |
+| 3 | 0.7302 | 4.00 | 1.000 |
+| 4 | 0.7173 | 4.00 | 1.000 |
+| 5 | 0.7092 | 4.00 | 1.000 |
+| 6 | 0.7055 | 4.00 | 1.000 |
 
-Evaluation report: FVU 0.6795, L0 4.00, dead fraction 0.000, CE recovered nan (CE clean 9.0214, SAE 9.0030, mean-ablate 8.9310). Transfer path (same model as SFT): plain FVU 0.6795, template FVU 0.6966, template CE recovered nan.
+Evaluation report: FVU 0.7055, L0 4.00, dead fraction 0.000, CE recovered nan (CE clean 9.0214, SAE 9.0017, mean-ablate 8.9310). Transfer path (same model as SFT): plain FVU 0.7055, template FVU 0.7233, template CE recovered nan.
 
 Verdict flags from the same run (an untrained 128-latent SAE on a tiny model is not expected to pass): `{'A1_fvu': False, 'A2_l0': False, 'A3_dead': True, 'A4_ce': False, 'layer_passes_A1_A4': False, 'A5_transfer': False}`.
 
