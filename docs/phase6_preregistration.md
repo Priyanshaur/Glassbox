@@ -102,3 +102,40 @@ implemented in `interp/eval_sae.py`.
   is reported in full, successes and failures.
 - Also reported: the fraction of features with no clear label (section B), and for each
   succeeded feature the full dose-response table.
+
+## Amendment 1 (committed before any SAE run): window position 0
+
+**Decision (user):** window position 0, whose residual norm is about 2x the other positions
+(layer 4 of the base model: 135 vs 65.5; `docs/phase6_smoke.md`), is excluded from the SAE
+training loss and reported separately in evaluation.
+
+- **Training.** The first position of every window is dropped from the training buffer
+  (`skip_first = 1`, the default). The normalization scale is computed over positions >= 1.
+- **A1-A4 are unchanged.** Same definitions and thresholds, still measured on **every**
+  position, position 0 included. This is the stricter reading (see the bias note below).
+- **A3 scan:** window position 0 is excluded from the dead-feature scan.
+- **Extra reports (no pass rule):** FVU for `pos0`, `pos1_15`, `first_16` (the original
+  bucket) and `rest`; FVU and L0 over positions >= 1; CE recovered with position 0 left
+  unpatched in both patched runs (mean residual taken over positions >= 1); the flags
+  `verdict_excl_pos0` (A1, A2, A4 recomputed on those variants).
+- **If a rule fails on every position but passes only in a position-0-excluded variant,** it
+  is reported as a **fail** of the pre-registered rule with the variant result next to it. No
+  pass credit is given without an explicit decision by the user.
+
+**Bias note (why this does not favor A1-A4).**
+
+- *A1 and A2.* Position 0 is 1 of 512 tokens but carries about 4x the squared norm, at most
+  about 0.8% of total variance. Even if it were reconstructed completely wrongly, FVU would
+  rise by roughly 0.01 against a threshold of 0.15, and L0 is unaffected. Dropping it from
+  training removes 0.2% of training tokens.
+- *A4 is the sensitive one, and the bias is against passing.* Position 0 behaves like an
+  attention sink: later tokens attend to it. An SAE that never trained on it reconstructs it
+  poorly, and patching that reconstruction in perturbs the attention of every later position,
+  so CE can degrade far more than its 1/512 share of tokens. The all-position A4 is therefore
+  conservative; the unpatched variant measures how much of any shortfall is position 0.
+- *A3 would be biased upward if position 0 were scanned* (latents firing only on the outlier
+  would count as alive), which is why it is excluded from the scan.
+- *Use-time mismatch.* Every prompt's first token sits at position 0 at inference and in the
+  A5 template data, where the SAE's features are not meaningful. Feature scans, labeling
+  contexts and activation statistics skip position 0; steering injects decoder directions at
+  all positions and does not rely on the encoder at position 0.
