@@ -66,6 +66,15 @@ def test_reconstruction_metrics_identity_and_mean_predictor():
     assert r0["fvu"] == pytest.approx(1.0, abs=1e-6)       # a decoder of zeros predicts only the mean
 
 
+def test_fvu_by_position_splits_first_positions_from_the_rest():
+    x = torch.randn(6, 40, 64)
+    r = E.fvu_by_position(identity_sae(), x, split=16)
+    assert set(r) == {"first_16", "rest"} and r["first_16"] < 1e-8 and r["rest"] < 1e-8
+    s = TopKSAE(64, 128, 4, seed=0)
+    r2 = E.fvu_by_position(s, x, split=16)
+    assert all(math.isfinite(v) and v > 0 for v in r2.values())
+
+
 def test_dead_fraction_counts_latents_that_cannot_fire():
     m = structured_model()
     tr = ShardLoader("data", "train")
@@ -149,4 +158,4 @@ def test_full_evaluate_pipeline_on_the_debug_model_with_transfer(tmp_path):
         assert k in rep
     assert rep["transfer"]["plain"]["fvu"] == pytest.approx(rep["fvu"], rel=1e-5)   # same model: same numbers
     assert math.isfinite(rep["fvu"]) and 0 <= rep["dead_fraction"] <= 1
-    assert "A5_transfer" in rep["verdict"]
+    assert "A5_transfer" in rep["verdict"] and set(rep["fvu_by_position"]) == {"first_16", "rest"}
