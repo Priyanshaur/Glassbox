@@ -117,10 +117,12 @@ distributions: `docs/results_final.md`.
 ## Inference (Phase 5): what was measured
 
 Code: `inference/kv_cache.py` (static preallocated KV cache), `inference/generate.py`
-(generation engine), `inference/quantize.py` (int8 weight-only, fp16). Results so
-far are CPU only (laptop, 6 threads, SFT checkpoint, fp32); no GPU numbers yet.
-Protocol and raw data: `docs/benchmark_protocol.md`, `docs/benchmark_cpu.md`,
-`docs/benchmark_cpu_notes.md`.
+(generation engine), `inference/quantize.py` (int8 weight-only, fp16). Protocol:
+`docs/benchmark_protocol.md`. Results come from two machines and should be read
+separately: a laptop CPU and a Kaggle Tesla T4. All results are for this 31.5M
+parameter model, the SFT checkpoint, and **K=4 prompts per regime**.
+
+### Laptop CPU (fp32, 6 threads, G=64) - `docs/benchmark_cpu.md`, `docs/benchmark_cpu_notes.md`
 
 - **A KV cache is much faster than recomputing**: 2.2-7.9x end-to-end in the cells
   that were run.
@@ -135,3 +137,26 @@ Protocol and raw data: `docs/benchmark_protocol.md`, `docs/benchmark_cpu.md`,
   (31.7 MB vs 125.9 MB) at +0.04% gold-story perplexity
   (`docs/quantization_results.md`). It was 1.17-1.65x *slower* than fp32 on the CPU
   (no fused int8 kernel).
+
+### Tesla T4 (fp32 and fp16, G=128, 10 repeats) - `docs/benchmark_t4.md`
+
+- **Decode is launch-bound.** The decode step is a flat ~10-11 ms for n=1, 8 and 32
+  and for every cache type. That flat step is what suggests per-step launch and
+  Python overhead rather than GPU compute; it was **diagnosed from the timings,
+  not profiled**.
+- **Cache gain depends on the cell.** A cache is 1.9x faster than no cache at n=8
+  short prompts (1.91x, CI 1.86-1.95) and 1.13x at n=1 long, but there is **no
+  measurable difference at n=1 short** (0.99x for tuple, CI 0.99-1.01).
+- **Static vs tuple matters only at n=32 with long prompts** (1.14x end-to-end, CI
+  1.13-1.16); everywhere else there is no measurable difference (about 1% at most).
+- **fp16 helps time to first token but not decode.** First token is faster where the
+  prefill is large (n=8 long 2.72x, n=32 long 4.75x, n=32 short 1.38x) and slightly
+  slower at n=1 short (0.95x); the per-step decode is 4-6% *slower* in most cells.
+  fp16 halves the KV cache and model memory, and passed its pre-registered quality
+  gate (gold-story perplexity 2.6360 vs 2.6361, -0.003%; rule: within 2%).
+- **Batching is nearly free.** Static fp32 on short prompts: about 97, 772 and 3,013
+  tokens/s at n=1, 8 and 32, with the step time unchanged.
+- **Scope.** These numbers are specific to this model and this GPU (a T4 with 2 torch
+  threads on Kaggle); they say nothing about larger models or GPUs where decode is
+  compute-bound. CUDA graphs / `torch.compile` were not tried (see
+  `docs/decisions.md`).
