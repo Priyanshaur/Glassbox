@@ -71,3 +71,11 @@ def test_speed_fp16_path_exercised_on_cpu(tmp_path):
     assert "fp16/static/n=1/short" in names and "fp16/static/n=2/long" in names
     assert any(k.startswith("fp16|") for k in r["gate"]) and all(v["pass"] for v in r["gate"].values())
     assert any(c["comparison"].startswith("fp16 static vs fp32 static") for c in r["comparisons"])
+
+
+def test_skipped_cell_reason_names_the_right_device():
+    cfgs, skipped = speed.build_configs({"fp32": None}, [1, 8, 32], "reduced", "cpu")
+    assert len(skipped) == 3 and all("on CPU" in why for _, why in skipped)
+    cfgs, skipped = speed.build_configs({"fp32": None}, [1, 8, 32], "reduced", "cuda")
+    assert len(skipped) == 3 and all("CPU" not in why and "time cap" in why for _, why in skipped)
+    assert speed.build_configs({"fp32": None}, [1, 8, 32], "full", "cuda")[1] == []
