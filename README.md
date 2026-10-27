@@ -155,7 +155,7 @@ parameter model, the SFT checkpoint, and **K=4 prompts per regime**.
   fp16 halves the KV cache and model memory, and passed its pre-registered quality
   gate (gold-story perplexity 2.6360 vs 2.6361, -0.003%; rule: within 2%).
 - **Batching is nearly free.** Static fp32 on short prompts: about 97, 772 and 3,013
-  tokens/s at n=1, 8 and 32, with the step time unchanged.
+  tokens/s at n=1, 8 and 32, with the step time essentially unchanged (10.3-10.6 ms).
 - **Scope.** These numbers are specific to this model and this GPU (a T4 with 2 torch
   threads on Kaggle); they say nothing about larger models or GPUs where decode is
   compute-bound. CUDA graphs / `torch.compile` were not tried (see
