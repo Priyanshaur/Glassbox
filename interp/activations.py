@@ -53,19 +53,30 @@ def norm_stats(model, loader, layer, seed, n_windows, ctx, chunk=32, device=None
             "mean_vector_norm": float(acts.reshape(-1, acts.shape[-1]).mean(0).norm())}
 
 
-def estimate_norm_scale(model, loader, layer, seed, n_windows, ctx, chunk=32, device=None):
-    """scale such that scale * mean_token_norm == sqrt(d)."""
-    s = norm_stats(model, loader, layer, seed, n_windows, ctx, chunk, device)
-    return float(np.sqrt(s["d"]) / s["mean_norm"])
+def estimate_norm_scale(model, loader, layer, seed, n_windows, ctx, chunk=32, device=None,
+                        skip_first=1):
+    """scale such that scale * mean_token_norm == sqrt(d), the mean taken over the positions
+    the SAE trains on (window positions >= skip_first; position 0 is an outlier sink)."""
+    acts = record_windows(model, draw_windows(loader, seed, 0, n_windows, ctx), layer, chunk, device)
+    mean_norm = float(acts[:, skip_first:].norm(dim=-1).mean())
+    return float(np.sqrt(acts.shape[-1]) / mean_norm)
 
 
 @torch.no_grad()
-def fill_buffer(model, loader, layer, seed, epoch, buffer_tokens, ctx, scale, chunk=32, device=None):
-    """(n_windows * ctx, d) scaled activations; a pure function of (seed, epoch)."""
+def fill_buffer(model, loader, layer, seed, epoch, buffer_tokens, ctx, scale, chunk=32, device=None,
+                skip_first=1):
+    """(n_windows * (ctx - skip_first), d) scaled activations, a pure function of
+    (seed, epoch). The first `skip_first` positions of every window (position 0: a
+    ~2x-norm sink-like outlier) are left out of the training buffer."""
     n_windows = max(buffer_tokens // ctx, 1)
     ids = draw_windows(loader, seed, epoch, n_windows, ctx)
-    acts = record_windows(model, ids, layer, chunk, device)
+    acts = record_windows(model, ids, layer, chunk, device)[:, skip_first:]
     return (acts * scale).reshape(-1, acts.shape[-1])
+
+
+def buffer_rows(buffer_tokens, ctx, skip_first=1):
+    """Number of training rows a buffer holds."""
+    return max(buffer_tokens // ctx, 1) * (ctx - skip_first)
 
 
 def epoch_batches(buffer, batch_tokens, seed, epoch):

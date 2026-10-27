@@ -50,10 +50,11 @@ class TrainConfig:
     eval_windows: int = 64
     max_hours: float = 0.0              # 0 = off; checked at epoch boundaries
     stop_after_epoch: int = 0           # 0 = off; stop cleanly after this many epochs (probes, tests)
+    skip_first: int = 1                 # window positions left out of training (position 0: sink outlier)
 
     @property
     def steps_per_epoch(self):
-        return self.buffer_tokens // self.batch_tokens
+        return A.buffer_rows(self.buffer_tokens, self.ctx, self.skip_first) // self.batch_tokens
 
 
 def _atomic_save(obj, path):
@@ -71,13 +72,24 @@ def file_sha256(path):
 
 
 @torch.no_grad()
-def quick_eval(sae, val_acts):
-    """FVU, mean L0 and the fraction of latents that fired at least once on `val_acts`."""
+def quick_eval(sae, val_acts, keep=None):
+    """FVU, mean L0 and the fraction of latents that fired at least once on `val_acts`.
+    `keep` (bool per row) additionally gives `fvu_excl_pos0` over the kept rows, i.e.
+    without window position 0, the position the SAE does not train on."""
     x_hat, acts, _ = sae(val_acts)
     err = ((val_acts - x_hat) ** 2).sum()
     var = ((val_acts - val_acts.mean(0)) ** 2).sum()
-    return {"fvu": float(err / var), "l0": float((acts > 0).sum(-1).float().mean()),
-            "alive_frac": float((acts > 0).any(0).float().mean())}
+    out = {"fvu": float(err / var), "l0": float((acts > 0).sum(-1).float().mean()),
+           "alive_frac": float((acts > 0).any(0).float().mean())}
+    if keep is not None:
+        x, xh = val_acts[keep], x_hat[keep]
+        out["fvu_excl_pos0"] = float(((x - xh) ** 2).sum() / ((x - x.mean(0)) ** 2).sum())
+    return out
+
+
+def _sync(device):
+    if str(device).startswith("cuda"):
+        torch.cuda.synchronize()
 
 
 def train(model, train_loader, val_loader, cfg: TrainConfig, out_dir, device="cpu", log=print,
@@ -101,13 +113,16 @@ def train(model, train_loader, val_loader, cfg: TrainConfig, out_dir, device="cp
         log(f"[sae] resumed epoch {epoch0} step {step}")
     else:
         scale = A.estimate_norm_scale(model, train_loader, cfg.layer, cfg.seed, cfg.norm_windows,
-                                      cfg.ctx, cfg.chunk, device)
+                                      cfg.ctx, cfg.chunk, device, cfg.skip_first)
         first_buffer = A.fill_buffer(model, train_loader, cfg.layer, cfg.seed, 0, cfg.buffer_tokens,
-                                     cfg.ctx, scale, cfg.chunk, device)
+                                     cfg.ctx, scale, cfg.chunk, device, cfg.skip_first)
         sae.init_b_dec(first_buffer.mean(0))
         log(f"[sae] fresh run: act_scale {scale:.5f}, total steps {total_steps}")
     val_acts, _ = A.eval_activations(model, val_loader, cfg.layer, cfg.eval_windows, cfg.ctx, scale,
                                      chunk=cfg.chunk, device=device)
+    val_keep = (torch.arange(val_acts.shape[0], device=val_acts.device) % cfg.ctx) >= cfg.skip_first
+    if str(device).startswith("cuda"):
+        torch.cuda.reset_peak_memory_stats()
 
     def save_all(epoch_done):
         _atomic_save({"sae": sae.state_dict(), "opt": opt.state_dict(), "epoch": epoch_done,
@@ -118,9 +133,14 @@ def train(model, train_loader, val_loader, cfg: TrainConfig, out_dir, device="cp
 
     t_start, reason = time.time(), "epochs"
     for epoch in range(epoch0, cfg.epochs):
+        _sync(device)
+        t0 = time.perf_counter()
         buf = first_buffer if (epoch == 0 and first_buffer is not None) else A.fill_buffer(
             model, train_loader, cfg.layer, cfg.seed, epoch, cfg.buffer_tokens, cfg.ctx, scale,
-            cfg.chunk, device)
+            cfg.chunk, device, cfg.skip_first)
+        _sync(device)
+        t_fill = time.perf_counter() - t0
+        t1, n_steps = time.perf_counter(), 0
         last = {}
         for batch in A.epoch_batches(buf, cfg.batch_tokens, cfg.seed, epoch):
             lr = lr_at(step, cfg.lr, cfg.warmup_steps, total_steps)
@@ -133,15 +153,26 @@ def train(model, train_loader, val_loader, cfg: TrainConfig, out_dir, device="cp
             opt.step()
             sae.normalize_decoder()
             step += 1
+            n_steps += 1
             last = parts
             if step % cfg.log_every == 0:
                 rec = {"step": step, "epoch": epoch, "lr": lr, "loss": float(loss.detach()), **parts}
                 metrics_f.write(json.dumps(rec) + "\n")
                 metrics_f.flush()
         first_buffer = None
+        _sync(device)
+        t_train = time.perf_counter() - t1
+        stats = {"epoch": epoch, "fill_s": t_fill, "train_s": t_train, "steps": n_steps,
+                 "train_tokens": n_steps * cfg.batch_tokens,
+                 "train_tokens_per_s": n_steps * cfg.batch_tokens / max(t_train, 1e-9),
+                 "extract_tokens_per_s": buf.shape[0] / max(t_fill, 1e-9)}
+        if str(device).startswith("cuda"):
+            stats["peak_mem_mb"] = torch.cuda.max_memory_allocated() / 2 ** 20
+        metrics_f.write(json.dumps({"epoch_stats": stats}) + "\n")
+        metrics_f.flush()
         done = epoch + 1
         if done % cfg.eval_every == 0 or done == cfg.epochs:
-            ev = quick_eval(sae, val_acts)
+            ev = quick_eval(sae, val_acts, val_keep)
             metrics_f.write(json.dumps({"step": step, "epoch": epoch, "eval": ev,
                                         "n_dead_now": last.get("n_dead")}) + "\n")
             metrics_f.flush()

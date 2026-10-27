@@ -69,10 +69,24 @@ def test_reconstruction_metrics_identity_and_mean_predictor():
 def test_fvu_by_position_splits_first_positions_from_the_rest():
     x = torch.randn(6, 40, 64)
     r = E.fvu_by_position(identity_sae(), x, split=16)
-    assert set(r) == {"first_16", "rest"} and r["first_16"] < 1e-8 and r["rest"] < 1e-8
+    assert set(r) == {"pos0", "pos1_15", "first_16", "rest"} and all(v < 1e-8 for v in r.values())
     s = TopKSAE(64, 128, 4, seed=0)
     r2 = E.fvu_by_position(s, x, split=16)
     assert all(math.isfinite(v) and v > 0 for v in r2.values())
+
+
+def test_ce_recovered_can_leave_position_zero_unpatched():
+    m = structured_model()
+    ids = ShardLoader("data", "validation").batch_ids(5, 0, 24, CTX)
+    inputs, targets = ids[:, :CTX], ids[:, 1:CTX + 1]
+    mean = E.A.record_windows(m, inputs, LAYER).reshape(-1, 64).mean(0)
+    bad = mean_sae(mean)
+    both = E.ce_recovered(m, bad, LAYER, 1.0, inputs, targets, chunk=8)
+    skip = E.ce_recovered(m, bad, LAYER, 1.0, inputs, targets, chunk=8, patch_first=False)
+    assert both["ce_clean"] == pytest.approx(skip["ce_clean"], abs=1e-6)
+    assert abs(both["ce_sae"] - skip["ce_sae"]) > 1e-4                      # position 0 matters
+    ident = E.ce_recovered(m, identity_sae(), LAYER, 1.0, inputs, targets, chunk=8, patch_first=False)
+    assert abs(ident["ce_sae"] - ident["ce_clean"]) < 1e-4
 
 
 def test_dead_fraction_counts_latents_that_cannot_fire():
@@ -83,6 +97,7 @@ def test_dead_fraction_counts_latents_that_cannot_fire():
         s.b_enc[8:] = -1e9                              # these 8 can never be selected with a positive value
     r = E.dead_fraction(m, s, tr, LAYER, 1.0, tokens=2048, ctx=CTX, windows_per_round=16)
     assert r["scan_tokens"] >= 2048 and r["dead_fraction"] >= 0.5
+    assert r["scan_tokens"] % (CTX - 1) == 0                                # position 0 excluded from the scan
 
 
 def test_ce_recovered_is_one_for_a_perfect_sae_and_zero_for_the_mean_predictor():
@@ -158,4 +173,7 @@ def test_full_evaluate_pipeline_on_the_debug_model_with_transfer(tmp_path):
         assert k in rep
     assert rep["transfer"]["plain"]["fvu"] == pytest.approx(rep["fvu"], rel=1e-5)   # same model: same numbers
     assert math.isfinite(rep["fvu"]) and 0 <= rep["dead_fraction"] <= 1
-    assert "A5_transfer" in rep["verdict"] and set(rep["fvu_by_position"]) == {"first_16", "rest"}
+    assert "A5_transfer" in rep["verdict"]
+    assert set(rep["fvu_by_position"]) == {"pos0", "pos1_15", "first_16", "rest"}
+    assert set(rep["excl_pos0"]) >= {"fvu", "l0", "ce_recovered_pos0_unpatched"}
+    assert set(rep["verdict_excl_pos0"]) == {"A1_fvu", "A2_l0", "A4_ce"}
