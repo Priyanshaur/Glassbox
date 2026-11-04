@@ -1,5 +1,6 @@
 """Phase 6 / S1: the activation pipeline (debug model, local smoke shards)."""
 import numpy as np
+import pytest
 import torch
 
 from common.config import load_config
@@ -45,9 +46,11 @@ def test_norm_scale_is_computed_over_trained_positions_only():
     ids = A.draw_windows(tr, 0, 0, 16, CTX)
     with torch.no_grad():
         rec = m(ids, record_layers=[LAYER]).recorded[LAYER]
-    want = float(np.sqrt(64) / rec[:, 1:].norm(dim=-1).mean())
+    # float64 division of the float32 mean, like the code (np.float64 / torch tensor would round
+    # the quotient to float32, ~3e-6 absolute at 48: that made this assertion machine-dependent)
+    want = float(np.sqrt(64)) / float(rec[:, 1:].norm(dim=-1).mean())
     got = A.estimate_norm_scale(m, tr, LAYER, 0, 16, CTX)
-    assert abs(got - want) < 1e-6
+    assert got == pytest.approx(want, rel=1e-6)
     assert abs(A.estimate_norm_scale(m, tr, LAYER, 0, 16, CTX, skip_first=0) - got) > 1e-9
 
 
