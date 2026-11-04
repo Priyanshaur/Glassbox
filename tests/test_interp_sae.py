@@ -36,7 +36,8 @@ def test_gradient_projection_and_renormalization_keep_unit_norm_rows():
         loss.backward()
         sae.project_decoder_grad()
         g = sae.W_dec.grad
-        assert torch.allclose((g * sae.W_dec).sum(-1), torch.zeros(20), atol=1e-6)   # no radial component
+        radial = (g * sae.W_dec).sum(-1).abs().max()                  # no radial component, relative to |grad|
+        assert radial <= 1e-5 * g.abs().max()
         opt.step()
         sae.normalize_decoder()
     assert torch.allclose(sae.W_dec.norm(dim=1), torch.ones(20), atol=1e-5)

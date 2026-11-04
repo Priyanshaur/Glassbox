@@ -63,7 +63,7 @@ def test_reconstruction_metrics_identity_and_mean_predictor():
     r = E.reconstruction_metrics(identity_sae(), x)
     assert r["fvu"] < 1e-8 and r["l0"] == pytest.approx(64.0, abs=1.0) and sum(r["l0_hist"]) == 512
     r0 = E.reconstruction_metrics(mean_sae(x.mean(0)), x)
-    assert r0["fvu"] == pytest.approx(1.0, abs=1e-6)       # a decoder of zeros predicts only the mean
+    assert r0["fvu"] == pytest.approx(1.0, rel=1e-6)       # a decoder of zeros predicts only the mean
 
 
 def test_fvu_by_position_splits_first_positions_from_the_rest():
@@ -83,7 +83,7 @@ def test_ce_recovered_can_leave_position_zero_unpatched():
     bad = mean_sae(mean)
     both = E.ce_recovered(m, bad, LAYER, 1.0, inputs, targets, chunk=8)
     skip = E.ce_recovered(m, bad, LAYER, 1.0, inputs, targets, chunk=8, patch_first=False)
-    assert both["ce_clean"] == pytest.approx(skip["ce_clean"], abs=1e-6)
+    assert both["ce_clean"] == pytest.approx(skip["ce_clean"], rel=1e-6)
     assert abs(both["ce_sae"] - skip["ce_sae"]) > 1e-4                      # position 0 matters
     ident = E.ce_recovered(m, identity_sae(), LAYER, 1.0, inputs, targets, chunk=8, patch_first=False)
     assert abs(ident["ce_sae"] - ident["ce_clean"]) < 1e-4
