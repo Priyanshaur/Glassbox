@@ -303,3 +303,29 @@ buffer addresses make this feasible) and/or try `torch.compile(mode="reduce-over
 pre-registered success rule, and a correctness gate (tokens identical to the eager
 static loop). Risks: capture constraints (fixed shapes, the position offset), graph
 memory, longer warm-up. Nothing here has been started and nothing depends on it.
+
+
+## Phase 6 S4 probe, layer 4 (2026-11-05) - a PROBE, not acceptance
+
+Kernel `priyanshgaur/glassbox-sae-probe` v2 (private, Tesla T4), repo commit `7689fb9`,
+base weights SHA-256 `feb065a5...` (MATCH), 47 fast tests passed, status COMPLETE.
+v1 had failed on a machine-dependent float assertion (fixed in `f481eeb`); no code
+change to the SAE or its metrics. The numbers below are from a **10-epoch, 6-minute**
+training run and are **not** the layer's acceptance result.
+
+| Measured (probe) | Value |
+|---|---|
+| epochs / tokens trained | 10 / about 5.2M of the planned 100M |
+| FVU by epoch | 0.432, 0.328, 0.280, 0.251, 0.232, 0.218, 0.208, 0.200, 0.194, 0.190 |
+| stop rule ("falling clearly") | passed: last/first = 0.44 (<= 0.85), 9 of 9 pairs decreasing |
+| A1 FVU (<= 0.15) | 0.189 - **not met yet** (still falling about 0.005/epoch at the end) |
+| A2 L0 (8..32) | 32 - met (TopK: L0 = k by construction) |
+| A3 dead (<= 10%, 10M tokens) | 0.0 - met |
+| A4 CE recovered (>= 0.85) | 0.970 - met; 0.970 with position 0 unpatched |
+| FVU by position | pos 0: 0.137, pos 1-15: 0.159, rest: 0.191 |
+
+Timing: SAE training 5.2 s per 523k-token epoch (about 101k tokens/s); extracting the
+activations for the next epoch 28-52 s. Estimate for 192 epochs: 2.34 GPU h (training
+alone 0.29-3.02 h by range). Quota used by the probe: 0.354 h (0.396 h of the week).
+Not run: the full run, layers 2 and 6, labeling. Artifacts (SAE checkpoints, report
+JSON) stay on Kaggle / in the scratchpad; no `.pt` is committed.
