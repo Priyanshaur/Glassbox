@@ -29,7 +29,8 @@ def record_windows(model, input_ids, layer, chunk=32, device=None):
     outs = []
     for i in range(0, input_ids.shape[0], chunk):
         x = input_ids[i:i + chunk].to(device)
-        outs.append(model(x, record_layers=[layer]).recorded[layer].float())
+        # stop_after: blocks past `layer` and the output layer are not needed (bit-identical, tested)
+        outs.append(model(x, record_layers=[layer], stop_after=layer).recorded[layer].float())
     model.train(was_training)
     return torch.cat(outs, dim=0)
 
