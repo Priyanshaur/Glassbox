@@ -68,7 +68,10 @@ class GPT(nn.Module):
                 b.mlp.w_down.weight.mul_(s)
 
     def forward(self, ids, past_kvs=None, pos_offset=0, record_layers=None,
-                inject=None, impl="sdpa"):
+                inject=None, impl="sdpa", stop_after=None):
+        """`stop_after=i` (activation extraction only) returns right after block i: the later
+        blocks and the output layer are skipped and `logits` is None. The first i+1 blocks run the
+        same ops on the same inputs, so `recorded` is bit-identical to a full forward."""
         B, T = ids.shape
         assert T > 0, "empty sequence"
         assert pos_offset + T <= self.context_len, "exceeds context_len"
@@ -91,6 +94,8 @@ class GPT(nn.Module):
             if i in rec:
                 recorded[i] = x.clone()
             new_kvs.append(kv)
+            if stop_after is not None and i >= stop_after:
+                return GPTOutput(logits=None, new_kvs=new_kvs, recorded=recorded)
         x = self.ln_f(x)
         logits = F.linear(x, self.wte.weight) if self.tying else self.lm_head(x)
         return GPTOutput(logits=logits, new_kvs=new_kvs, recorded=recorded)
