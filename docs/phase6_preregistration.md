@@ -139,3 +139,28 @@ training loss and reported separately in evaluation.
   A5 template data, where the SAE's features are not meaningful. Feature scans, labeling
   contexts and activation statistics skip position 0; steering injects decoder directions at
   all positions and does not rely on the encoder at position 0.
+
+
+## Result - layer 4 full run (2026-11-05), measured against A1-A4 as written above
+
+Kernel `priyanshgaur/glassbox-sae-full` v1, commit `77dedad`, base weights SHA-256 `feb065a5...` (MATCH).
+192 of 192 epochs (100.5M training tokens, window position 0 excluded), 24,384 steps, status COMPLETE.
+Thresholds were not changed after seeing any number. Evaluation: 499,712 validation tokens, all positions;
+dead scan over 10,007,424 fresh train tokens.
+
+| Rule | Threshold | Measured | Result |
+|---|---|---|---|
+| A1 FVU | <= 0.15 | 0.1413 | met, by 0.009 (a thin margin) |
+| A2 L0 | 8 to 32 | 32 | met, by construction (TopK with k = 32 gives L0 = k) |
+| A3 dead | <= 0.10 | 0.0 | met |
+| A4 CE recovered | >= 0.85 | 0.9827 | met |
+
+- Position 0 (non-gating, Amendment 1): FVU by position is 0.105 at position 0, 0.120 at 1-15, 0.143 for the
+  rest; with position 0 left unpatched FVU is 0.1415 and CE recovered 0.9828. No verdict changes.
+- A5 (SFT transfer) was **not evaluated**; layers 2 and 6 and labeling were not run.
+- FVU was still flattening at the end (0.1425 at epoch 145, 0.1420 at 185), so the A1 margin is not due to
+  an unfinished run, but it is small; any change of evaluation tokens or seed can move it by a few thousandths.
+- Test-line caveat: the in-kernel fast-test run printed `49 passed, 1 skipped`. The skipped test is the
+  real-weights bit-identity test of the early-exit forward (the checkpoint is not in git, so it cannot run on
+  Kaggle); it was run locally and passed. The notebook's `tests: PASS` field means "exit code 0", which includes
+  that skip.

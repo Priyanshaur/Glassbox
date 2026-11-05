@@ -329,3 +329,23 @@ activations for the next epoch 28-52 s. Estimate for 192 epochs: 2.34 GPU h (tra
 alone 0.29-3.02 h by range). Quota used by the probe: 0.354 h (0.396 h of the week).
 Not run: the full run, layers 2 and 6, labeling. Artifacts (SAE checkpoints, report
 JSON) stay on Kaggle / in the scratchpad; no `.pt` is committed.
+
+
+## Phase 6 S4 layer-4 full run: accepted by A1-A4 (2026-11-05)
+
+Kernel `priyanshgaur/glassbox-sae-full` v1 (private, T4), commit `77dedad`, COMPLETE, 192/192 epochs. This is the
+acceptance measurement of the pre-registered rules (thresholds unchanged); the earlier 10-epoch probe is a separate,
+non-acceptance entry above.
+
+- A1 FVU **0.1413** (<= 0.15): met by **0.009**, a thin margin. A2 L0 32: met **by construction** (TopK, k = 32).
+  A3 dead 0.0 (<= 0.10): met. A4 CE recovered **0.9827** (>= 0.85): met. Position 0 does not change any verdict
+  (unpatched variant: FVU 0.1415, CE recovered 0.9828). **A5 was not evaluated.**
+- Cost: 1.01 GPU h (estimate was 2.34 h): activation extraction on the T4 ran at 61-67k tokens/s with the
+  early-exit forward (probe: 15k in training, 40k in the sweep). The early-exit change is bit-identical and tested.
+- Caveats: in-kernel tests were `49 passed, 1 skipped` (the real-weights early-exit test needs the untracked
+  checkpoint; it passed locally). Buffer-fill time fell from 45 s to 8 s over the first epochs; the cause is not
+  identified.
+- Artifacts (not committed): `checkpoints/glassbox-sae-l4/` holds `sae_latest.pt` (16,831,963 bytes, SHA-256
+  `bd9ec5e3192861b16b9976eb3050077e959debb611f051dc382c494e64a502e9`), `full_report.json` (8,171 bytes) and the
+  kernel log (37,931 bytes); also on Kaggle as the kernel's output. Nothing uploaded; nothing deleted.
+- Not started: A5, layers 2 and 6, labeling, steering.
