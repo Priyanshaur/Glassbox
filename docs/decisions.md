@@ -349,3 +349,28 @@ non-acceptance entry above.
   `bd9ec5e3192861b16b9976eb3050077e959debb611f051dc382c494e64a502e9`), `full_report.json` (8,171 bytes) and the
   kernel log (37,931 bytes); also on Kaggle as the kernel's output. Nothing uploaded; nothing deleted.
 - Not started: A5, layers 2 and 6, labeling, steering.
+
+
+## Phase 6 A5 (SFT transfer): PASSED, steering target = SFT (2026-11-07)
+
+Local CPU run of `analysis/a5_transfer.py`, rule and thresholds exactly as pre-registered (FVU <= 0.25 and CE recovered
+>= 0.80 on BOTH plain and template inputs; fails if either fails). Base-trained layer-4 SAE (`bd9ec5e3...`), SFT weights
+`d043156e...` (hash pinned from the file on disk before the run, no earlier record), base `feb065a5...`. Plain: the same
+976 x 512 = 499,712 validation tokens as A1-A4. Template: 200 sequences, 36,767 response tokens.
+
+| input | model | FVU (<= 0.25) | CE recovered (>= 0.80) | CE clean / SAE / mean-ablated |
+|---|---|---|---|---|
+| plain | **SFT** (gating) | 0.1438 | 0.9823 | 1.310 / 1.427 / 7.879 |
+| template | **SFT** (gating) | 0.1578 | 0.9823 | 0.970 / 1.096 / 8.125 |
+| plain | base (reference only) | 0.1413 | 0.9827 | 1.299 / 1.416 / 8.069 |
+| template | base (reference only) | 0.1717 | 0.9824 | 1.088 / 1.211 / 8.051 |
+
+**Verdict A5_transfer = True; steering target = SFT.**
+
+- Provenance: the SFT cells were measured under commit `10d2a71`; the process was then killed with the session and the
+  report was resumed (cells kept, SHA-256 and window counts verified) with `7198e7e`, which only adds per-cell save and
+  resume (measurement code moved verbatim). The base cells ran under that code (logged as `10d2a71+uncommitted-edits`
+  because the edit was committed after launch). Report: `docs/phase6_a5_report.json`.
+- Caveats: the base template cell took 8,224 s against 362 s for SFT's; the cause is not identified (probably the
+  laptop sleeping or contention), the numbers are unaffected. Template FVU is only a little worse than plain (0.158 vs
+  0.144). Template is one 200-sequence draw. The base rows do not gate.
