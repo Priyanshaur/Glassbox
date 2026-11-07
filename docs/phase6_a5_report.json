@@ -1,0 +1,87 @@
+{
+ "label": "A5 SFT transfer (pre-registered rule; thresholds unchanged)",
+ "thresholds": {
+  "fvu_max": 0.25,
+  "ce_recovered_min": 0.8
+ },
+ "sha256": {
+  "sae_latest.pt": "bd9ec5e3192861b16b9976eb3050077e959debb611f051dc382c494e64a502e9",
+  "base_weights": "feb065a5bc7d0ca240d756cd7bc48d8e1e284349a35dcd783ece4dc0c899aab0",
+  "sft_weights": "d043156ee2d23aed1336cb42c80efe8cd603c40421a469d4d9519d230cbc3a5c"
+ },
+ "commit": "10d2a71c082fd4223c07ccfa17696399787a001b+uncommitted-edits-to-a5_transfer.py",
+ "layer": 4,
+ "act_scale": 0.3437995039480051,
+ "eval_seed": 999983,
+ "sft": {
+  "plain": {
+   "fvu": 0.14378277703059658,
+   "l0": 32.0,
+   "tokens": 499712,
+   "ce_clean": 1.3101917661604334,
+   "ce_sae": 1.4266768928434028,
+   "ce_meanablate": 7.878785586747967,
+   "ce_recovered": 0.9822663526068734
+  },
+  "template": {
+   "fvu": 0.15776169402537252,
+   "l0": 32.0,
+   "sequences": 200,
+   "response_tokens": 36767,
+   "ce_clean": 0.9694519300276913,
+   "ce_sae": 1.096121909805328,
+   "ce_meanablate": 8.12477667643539,
+   "ce_recovered": 0.9822971026100205
+  }
+ },
+ "base_same_windows_reference": {
+  "plain": {
+   "fvu": 0.14127054571837377,
+   "l0": 32.0,
+   "tokens": 499712,
+   "ce_clean": 1.299021101388775,
+   "ce_sae": 1.4160173349693173,
+   "ce_meanablate": 8.06914701618132,
+   "ce_recovered": 0.9827187507214735
+  },
+  "template": {
+   "fvu": 0.17169937823646475,
+   "l0": 32.0,
+   "sequences": 200,
+   "response_tokens": 36767,
+   "ce_clean": 1.0878212480791198,
+   "ce_sae": 1.2106248988031896,
+   "ce_meanablate": 8.050558085800446,
+   "ce_recovered": 0.982362732703214
+  }
+ },
+ "verdict_sft": {
+  "plain": {
+   "fvu_ok": true,
+   "ce_ok": true,
+   "passes": true
+  },
+  "template": {
+   "fvu_ok": true,
+   "ce_ok": true,
+   "passes": true
+  },
+  "A5_transfer": true
+ },
+ "A5_transfer": true,
+ "base_reference_flags_not_gating": {
+  "plain": {
+   "fvu_ok": true,
+   "ce_ok": true,
+   "passes": true
+  },
+  "template": {
+   "fvu_ok": true,
+   "ce_ok": true,
+   "passes": true
+  },
+  "A5_transfer": true
+ },
+ "steering_target": "sft",
+ "seconds": 9976.212970972061
+}
