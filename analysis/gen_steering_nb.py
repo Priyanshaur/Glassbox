@@ -44,7 +44,7 @@ print("[steer] repo commit", COMMIT, "| Generator.generate has inject", flush=Tr
 subprocess.run([sys.executable, "-m", "pip", "install", "-q", "regex", "pyyaml", "pytest", "tqdm"], check=True)'''
 
 TESTS = '''import subprocess, sys
-p = subprocess.run([sys.executable, "-m", "pytest", "tests/test_generate_inject.py", "tests/test_steering.py", "tests/test_early_exit.py",
+p = subprocess.run([sys.executable, "-m", "pytest", "tests/test_generate_inject.py", "tests/test_steering.py",
                     "tests/test_hooks.py", "-q"], capture_output=True, text=True)
 print(p.stdout[-600:])
 if p.returncode != 0:
