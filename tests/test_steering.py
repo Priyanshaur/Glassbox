@@ -82,3 +82,13 @@ def test_keyword_words_of_the_prompt_are_not_counted_and_matching_is_whole_word(
     assert T.has_concept("She ate apples.", ["apples"], set())
     assert not T.has_concept("She ate pineapples.", ["apples"], set())
     assert not T.has_concept("She ate apples.", ["apples"], {"apples"})
+
+
+def test_every_injection_vector_lives_on_the_saes_device():
+    """Kaggle probe v2 failed with cuda/cpu tensors mixed: the random controls were built on the CPU. 'meta' stands in
+    for cuda here, so any tensor created on the wrong device is caught without a GPU."""
+    sae = TopKSAE(16, 40, 4, seed=3).to("meta")
+    for name, _kind, _s, inj in T.conditions(sae, 0.5, 7, 2.0):
+        for v in inj.values():
+            if torch.is_tensor(v):
+                assert v.device.type == "meta", name
