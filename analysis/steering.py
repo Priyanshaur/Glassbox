@@ -48,10 +48,10 @@ def feature_vector(sae, act_scale, f, a_f, s):
     return s * a_f * sae.W_dec[f].detach() / act_scale
 
 
-def random_vector(norm, seed, d):
-    g = torch.Generator().manual_seed(seed)
+def random_vector(norm, seed, d, device="cpu"):
+    g = torch.Generator().manual_seed(seed)                  # CPU generator: same direction on every machine
     v = torch.randn(d, generator=g)
-    return v / v.norm() * norm
+    return (v / v.norm() * norm).to(device)
 
 
 def ablation_hook(sae, act_scale, f):
@@ -71,7 +71,7 @@ def conditions(sae, act_scale, f, a_f):
     out = [(f"s{s}", "feature", s, {LAYER: feature_vector(sae, act_scale, f, a_f, s)}) for s in SCALES]
     for s in SCALES:
         for r in RANDOM_SEEDS:
-            out.append((f"rand_s{s}_{r}", "random", s, {LAYER: random_vector(abs(s) * a_f / act_scale, r, d)}))
+            out.append((f"rand_s{s}_{r}", "random", s, {LAYER: random_vector(abs(s) * a_f / act_scale, r, d, sae.W_dec.device)}))
     out.append((f"s{NEG_SCALE}", "negative", NEG_SCALE, {LAYER: feature_vector(sae, act_scale, f, a_f, NEG_SCALE)}))
     out.append(("ablate", "ablation", 0, {LAYER: ablation_hook(sae, act_scale, f)}))
     return out
