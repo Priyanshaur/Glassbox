@@ -24,7 +24,8 @@ INPUT_ROOT = "checkpoints"; SHARD_DIR = "data/full"; DEVICE = "cpu"; OUT = "{OUT
 PROBE_PROMPTS = 1; EXTRA_ARGS = ["--n", "2", "--max_new", "8"]
 COMMIT = "local"; sys.path.insert(0, os.getcwd())
 '''
-params = pick("MODE =").replace("PROBE_CAP_S = 20 * 60", f"PROBE_CAP_S = {cap}")
+params = pick("MODE =").replace('MODE = "full" ', 'MODE = "probe"').replace("PROBE_CAP_S = 20 * 60", f"PROBE_CAP_S = {cap}")
+assert 'MODE = "probe"' in params
 order = [params, over, pick("import glob, hashlib"), pick("import subprocess, sys, time, os"), pick("import json\ncells")]
 nb = nbformat.v4.new_notebook()
 nb.cells = [nbformat.v4.new_code_cell(c) for c in order]

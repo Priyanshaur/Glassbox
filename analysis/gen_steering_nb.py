@@ -14,9 +14,9 @@ pre-registered verdict. SHA-256 gates on the SFT weights and the SAE stop the ru
 **Attach three datasets:** `glassbox-dpo-init` (contains `sft_final_best.pt`), `glassbox-sae-l4` (contains `sae_latest.pt`),
 `tinystories-shards-8192` (validation shard for the prompts)."""
 
-PARAMS = '''MODE = "probe"            # "probe" (timing only) or "full" (the pre-registered run)
+PARAMS = '''MODE = "full"             # "probe" (timing only) or "full" (the pre-registered run)
 PROBE_CAP_S = 20 * 60     # probe: past this the kernel raises -> ERROR (never COMPLETE)
-FULL_CAP_S = int(8.0 * 3600)   # full: hard stop (set from the probe's measured time before launching)
+FULL_CAP_S = int(5.0 * 3600)   # full: hard stop = ERROR; probe measured 3.4 h (extrapolated), resumable
 SFT_BYTES, SFT_SHA = 125_893_429, "d043156ee2d23aed1336cb42c80efe8cd603c40421a469d4d9519d230cbc3a5c"
 SAE_BYTES, SAE_SHA = 16_831_963, "bd9ec5e3192861b16b9976eb3050077e959debb611f051dc382c494e64a502e9"
 import time
