@@ -64,8 +64,10 @@ class Generator:
     # ------------------------------------------------------------------ core loop
     @torch.no_grad()
     def _iter(self, prompt, n, max_new, temperature, top_k, top_p, seed,
-              stop_at_eot, replay_last_prompt_token):
-        """Yield (step, nxt (n,1), finished (n,)) after each sampled token."""
+              stop_at_eot, replay_last_prompt_token, inject=None):
+        """Yield (step, nxt (n,1), finished (n,)) after each sampled token. `inject` ({layer: vector or
+        callable}, see GPT.forward) is applied in the prefill and in every decode step; None (default) is the
+        unchanged path."""
         was_training = self.model.training
         self.model.eval()
         try:
@@ -75,18 +77,18 @@ class Generator:
             gen = torch.Generator(device=self.device).manual_seed(seed)
             base = torch.tensor([prompt_ids] * n, dtype=torch.long, device=self.device)
             cache = StaticKVCache.from_model(self.model, n, P + max_new)
-            out = self.model(base, past_kvs=cache.layers, pos_offset=0)
+            out = self.model(base, past_kvs=cache.layers, pos_offset=0, inject=inject)
             logits = out.logits[:, -1, :]
             ids = base
             finished = torch.zeros(n, dtype=torch.bool, device=self.device)
             for step in range(max_new):
                 if replay_last_prompt_token and step == 0:
                     # old-sampler quirk: re-feed the last prompt token (cache grows by one)
-                    s = self.model(ids[:, -1:], past_kvs=cache.layers, pos_offset=P - 1)
+                    s = self.model(ids[:, -1:], past_kvs=cache.layers, pos_offset=P - 1, inject=inject)
                     logits = s.logits[:, -1, :]
                 elif step > 0:
                     s = self.model(ids[:, -1:], past_kvs=cache.layers,
-                                   pos_offset=ids.shape[1] - 1)
+                                   pos_offset=ids.shape[1] - 1, inject=inject)
                     logits = s.logits[:, -1, :]
                 nxt = self._sample(logits, gen, temperature, top_k, top_p)
                 ids = torch.cat([ids, nxt], dim=1)
@@ -99,19 +101,20 @@ class Generator:
 
     # ------------------------------------------------------------------ public API
     def generate(self, prompt, n=1, max_new=64, temperature=0.8, top_k=50, top_p=None,
-                 seed=0, stop_at_eot=True, replay_last_prompt_token=False, should_stop=None):
+                 seed=0, stop_at_eot=True, replay_last_prompt_token=False, should_stop=None, inject=None):
         """n completions of one prompt. stop_at_eot=False always runs exactly
         max_new steps (fixed-length benchmarking). `should_stop` (a callable) is
         checked after every sampled token; when it returns True generation ends
         early (the server uses it for timeouts and cancellation) and
         `meta["stopped"]` is True. `meta` also carries `ttft_s` (generation start to
         the first sampled token: tokenization, cache allocation, prefill, first
-        sample) and `decode_s` (first token to last token)."""
+        sample) and `decode_s` (first token to last token). `inject` (default None = unchanged) is a steering
+        hook forwarded to every model call, see `_iter`."""
         cols, finished, steps, stopped = [], None, 0, False
         t0 = time.perf_counter()
         t_first = None
         for step, nxt, fin in self._iter(prompt, n, max_new, temperature, top_k, top_p, seed,
-                                         stop_at_eot, replay_last_prompt_token):
+                                         stop_at_eot, replay_last_prompt_token, inject):
             if t_first is None:
                 t_first = time.perf_counter()
             cols.append(nxt)
