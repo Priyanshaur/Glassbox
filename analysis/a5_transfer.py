@@ -49,17 +49,35 @@ def load_model(cfg, path):
     return m.eval()
 
 
-def measure(model, sae, layer, scale, plain, template, chunk, log):
-    """FVU/L0 and CE recovered of the SAE on one model, for both input types."""
-    out = {}
+def measure(model, sae, layer, scale, plain, template, chunk, log, out=None, on_cell=lambda: None):
+    """FVU/L0 and CE recovered of the SAE on one model, for both input types. `out` may already hold finished cells
+    (a resumed run): those are skipped; `on_cell` is called after each new cell so the report is saved per cell."""
+    out = {} if out is None else out
     inputs, targets = plain
     t = time.time()
+    if "plain" in out:
+        log("    plain    SKIPPED (already saved)")
+    else:
+        _plain(model, sae, layer, scale, inputs, targets, chunk, log, out, t)
+        on_cell()
+    if "template" in out:
+        log("    template SKIPPED (already saved)")
+    else:
+        _template(model, sae, layer, scale, template, chunk, log, out)
+        on_cell()
+    return out
+
+
+def _plain(model, sae, layer, scale, inputs, targets, chunk, log, out, t):
     acts = (A.record_windows(model, inputs, layer, chunk) * scale).reshape(-1, sae.d_in)
     m = E.reconstruction_metrics(sae, acts)
     c = E.ce_recovered(model, sae, layer, scale, inputs, targets, None, chunk)
     out["plain"] = {"fvu": m["fvu"], "l0": m["l0"], "tokens": int(inputs.numel()), **{k: c[k] for k in (
         "ce_clean", "ce_sae", "ce_meanablate", "ce_recovered")}}
     log(f"    plain    fvu {m['fvu']:.4f}  ce_recovered {c['ce_recovered']:.4f}  ({time.time() - t:.0f}s)")
+
+
+def _template(model, sae, layer, scale, template, chunk, log, out):
     ti, tt, tm = template
     t = time.time()
     f = E.template_fvu(model, sae, layer, scale, ti, tm, chunk)
@@ -67,7 +85,6 @@ def measure(model, sae, layer, scale, plain, template, chunk, log):
     out["template"] = {"fvu": f["fvu"], "l0": f["l0"], "sequences": int(ti.shape[0]), "response_tokens": int(c["tokens"]),
                        **{k: c[k] for k in ("ce_clean", "ce_sae", "ce_meanablate", "ce_recovered")}}
     log(f"    template fvu {f['fvu']:.4f}  ce_recovered {c['ce_recovered']:.4f}  ({time.time() - t:.0f}s)")
-    return out
 
 
 def judge(res):
@@ -124,11 +141,28 @@ def main(argv=None):
             assert ok, f"{key} hash mismatch; stopping"
     try:
         commit = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+        if subprocess.run(["git", "diff", "--quiet", "HEAD", "--", "analysis/a5_transfer.py"]).returncode:
+            commit += "+uncommitted-edits-to-a5_transfer.py"       # honest: the code run differs from the commit
     except OSError:
         commit = "unknown"
     log(f"[a5] code commit {commit}")
     partial = {"label": "A5 partial (run in progress)", "sha256": shas, "commit": commit}
-    save = lambda: json.dump(partial, open(a.out, "w"), indent=1)
+    saved = {}
+    if os.path.exists(a.out):                                   # resume: keep finished cells of a killed run
+        old = json.load(open(a.out))
+        if old.get("sha256") == shas and old.get("label", "").startswith("A5 partial"):
+            saved = {m: old[m] for m in ("sft", "base") if m in old}
+            partial["resumed_from_commit"] = old.get("resumed_from_commit") or old.get("commit")
+            log(f"[a5] RESUME: report has cells {{ {', '.join(f'{m}: {sorted(c)}' for m, c in saved.items())} }} "
+                f"from commit {partial['resumed_from_commit']}; same hashes")
+        else:
+            log("[a5] existing report does not match this run (hashes/label): ignoring it, starting fresh")
+    for m, c in saved.items():
+        partial[m] = c
+    def save():
+        tmp = a.out + ".tmp"
+        json.dump(partial, open(tmp, "w"), indent=1)
+        os.replace(tmp, a.out)                                  # atomic: a kill cannot leave a half-written report
     save()
 
     cfg = load_config(a.config)
@@ -149,13 +183,18 @@ def main(argv=None):
     log(f"[a5] plain windows {n_win} x {a.ctx} = {plain[0].numel():,} tokens | template sequences {template[0].shape[0]}"
         f" (len {template[0].shape[1]}, response tokens {int(template[2].sum()):,})")
 
+    # a resumed cell must have been measured on these exact inputs
+    for m, c in saved.items():
+        if "plain" in c: assert c["plain"]["tokens"] == plain[0].numel(), "saved plain cell: different windows"
+        if "template" in c: assert c["template"]["sequences"] == template[0].shape[0], "saved template cell: different sequences"
     res = {}
     for name, model in (("sft", sft), ("base", base)):
         log(f"[a5] {name} model:")
-        res[name] = measure(model, sae, a.layer, scale, plain, template, a.chunk, log)
-        partial[name] = res[name]
-        partial["label"] = f"A5 partial: {', '.join(res)} done"
-        save()
+        partial.setdefault(name, {})
+        def on_cell(name=name):
+            partial["label"] = f"A5 partial: cells saved {[(m, sorted(c)) for m, c in partial.items() if m in ('sft','base')]}"
+            save()
+        res[name] = measure(model, sae, a.layer, scale, plain, template, a.chunk, log, out=partial[name], on_cell=on_cell)
     flags = judge(res["sft"])
     base_flags = judge(res["base"])
     T = E.THRESHOLDS
