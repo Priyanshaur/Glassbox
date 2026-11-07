@@ -1,0 +1,44 @@
+{
+ "1131": {
+  "correct": 20,
+  "of": 20,
+  "valid": true,
+  "n_predicted": 10
+ },
+ "1319": {
+  "correct": 20,
+  "of": 20,
+  "valid": true,
+  "n_predicted": 10
+ },
+ "1672": {
+  "correct": 20,
+  "of": 20,
+  "valid": true,
+  "n_predicted": 10
+ },
+ "3589": {
+  "correct": 20,
+  "of": 20,
+  "valid": true,
+  "n_predicted": 10
+ },
+ "3651": {
+  "correct": 20,
+  "of": 20,
+  "valid": true,
+  "n_predicted": 10
+ },
+ "3694": {
+  "correct": 20,
+  "of": 20,
+  "valid": true,
+  "n_predicted": 10
+ },
+ "3990": {
+  "correct": 20,
+  "of": 20,
+  "valid": true,
+  "n_predicted": 10
+ }
+}

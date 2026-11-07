@@ -374,3 +374,22 @@ Local CPU run of `analysis/a5_transfer.py`, rule and thresholds exactly as pre-r
 - Caveats: the base template cell took 8,224 s against 362 s for SFT's; the cause is not identified (probably the
   laptop sleeping or contention), the numbers are unaffected. Template FVU is only a little worse than plain (0.158 vs
   0.144). Template is one 200-sequence draw. The base rows do not gate.
+
+
+## Phase 6 B: feature scans, labeling check, steering-feature choice (2026-11-07)
+
+CPU, base model, layer-4 SAE (`bd9ec5e3...`), position 0 skipped. Train scan 9,980,341 tokens (seed 20261103, random
+windows), disjoint validation scan 3,991,932 tokens (sequential windows). **All 4096 features fire at least 20 times**
+in the train scan and at least 20 in validation (never-fired 0), consistent with A3 (dead 0.0).
+
+- Labeling sample: 60 features, seed 20261101 (`docs/phase6_labeling/sample.json`), labels by the assistant from the 24
+  top contexts. **NO CLEAR LABEL fraction 0/60.** Blind check (10 true + 10 random-position controls from the disjoint
+  validation scan): **60/60 labels valid, every one 20/20**, so the procedure "passes" (>= 70% valid).
+- What that number means: it is not evidence that the features are interpretable concepts. The labels mostly name a
+  token in a fixed phrase ("to" after "didn't want", "hard" in "hard work"), the controls are random tokens, and the
+  labeler and scorer are the same model. Of the 60, nearly all are token/phrase patterns; a handful are loosely semantic
+  (heart/emotion, festival, water, dirty, heavy). The user's random 30-label spot-check file is prepared with an empty
+  rating column (`checkpoints/glassbox-sae-l4/labeling/spotcheck30.md`, git-ignored); no rating was filled in.
+- Steering features: only 509 of 4096 pass the mechanical anti-token checks of `docs/steering_features.md`, and few of
+  those are concepts. Walking them in the seeded order (20261102) gave five concept features: 1319, 3651, 1672, 1131,
+  3990 (see that file for labels, checks, a_f and keyword sets). Chosen before any steering run.
