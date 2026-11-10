@@ -393,3 +393,14 @@ in the train scan and at least 20 in validation (never-fired 0), consistent with
 - Steering features: only 509 of 4096 pass the mechanical anti-token checks of `docs/steering_features.md`, and few of
   those are concepts. Walking them in the seeded order (20261102) gave five concept features: 1319, 3651, 1672, 1131,
   3990 (see that file for labels, checks, a_f and keyword sets). Chosen before any steering run.
+
+
+## Phase 6 C: steering run, result "effect not established" (2026-11-10)
+
+Kernel `priyanshgaur/glassbox-steering-full` v1 (commit `4a8cddb`, T4, 4550 cells, 3.24 GPU h; the probe predicted 3.36 h). Pre-registered
+rules and the five features fixed beforehand; nothing changed afterwards. **2 of 5 features succeed (3651 furniture at s=4, 1131 night
+sky at s=2); the claim needs 3, so it is reported as "steering effect not established".** 1672 (clothing) has the largest effect but fails the
+fluency rule at every pre-registered scale (distinct-2 falls 0.054 at s=1, limit 0.05); 1319 reaches +0.076 (< 0.10); 3990 has no effect.
+Details and tables: `docs/steering_features.md` (Result), raw verdicts `docs/phase6_steering_verdict.json`. Raw samples (30 MB) are in
+`checkpoints/glassbox-steering-full/cells.jsonl` (git-ignored). Probe v1 and v2 of this kernel failed on my notebook/harness bugs (test needing
+`data/meta.json`; random controls on the CPU) and were fixed; v3 ran clean. Quota: about 3.4 GPU h used this week.

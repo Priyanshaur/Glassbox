@@ -1,4 +1,53 @@
-# MiniGPT-Stack + Brain Scanner (Phase 0 skeleton)
+# MiniGPT-Stack + Glassbox: a small LLM built from scratch, then opened up with a sparse autoencoder
+
+A 31.5M-parameter GPT (8 blocks, d_model 512, context 512, 8192-token BPE) trained from scratch on TinyStories, then
+instruction-tuned (SFT), preference-tuned (DPO), served by an inference stack and HTTP server, and finally examined with a
+sparse autoencoder (SAE) on the layer-4 residual stream. Heavy training ran on Kaggle T4s; analysis ran on a laptop CPU.
+
+## Results at a glance (all numbers are from this repo's docs; limits are stated next to each)
+
+| Part | Result | Where |
+|---|---|---|
+| SAE reconstruction (layer 4, F=4096, k=32) | FVU 0.1413 (limit 0.15, **thin margin**), L0 32 (by construction), dead features 0.0, CE recovered 0.983 (limit 0.85) | `docs/decisions.md`, `docs/phase6_preregistration.md` |
+| SAE transfer to the SFT model (A5) | **Passed**: FVU 0.144 plain / 0.158 template (limit 0.25), CE recovered 0.982 / 0.982 (limit 0.80) | `docs/decisions.md`, `docs/phase6_a5_report.json` |
+| Feature labels | Most of 60 random features are token or phrase patterns ("to" after "didn't want"), not concepts. A blind check scored 60/60, which is weak evidence (random controls, same model labels and scores) | `docs/decisions.md` |
+| **Steering (pre-registered)** | **Effect not established: 2 of 5 concept features pass** (furniture, night sky). Clothing has the biggest effect but breaks fluency at every tested strength | `docs/steering_features.md` |
+| DPO | Keyword coverage +0.8 of 3 but end-of-story rate falls 93% -> 79-81% (missed its 85% guardrail). **Not an overall win**; no human evaluation | `docs/results_final.md` |
+| Inference | KV cache 2-8x faster than recomputing; int8 weights shrink the file 4x (+0.04% perplexity) but are slower on CPU; fp16 on a T4 passes its quality gate; decode on the T4 is launch-bound | `docs/benchmark_*.md`, `docs/quantization_results.md` |
+
+Every threshold above was written down before the run (`docs/phase6_preregistration.md`) and not changed afterwards. A failed
+rule is reported as a failure.
+
+## Phase 6: what the brain scanner found
+
+- **The SAE is a good compressor of layer 4**: it explains about 86% of the variance and keeping its reconstruction
+  costs little next-token accuracy. It transfers to the SFT model almost unchanged.
+- **Most of its features are about words and phrases, not ideas.** Of 4096 features, only 509 pass a mechanical "not a single
+  token / not punctuation" check, and few of those are concepts. The ones that are (clothing, the night sky, furniture) are real.
+- **Steering works for some concepts.** Adding a feature's direction raised the rate of concept words from about 1% to 20-90% for
+  night sky and clothing, while a random direction of the same size and the opposite sign did nothing. But the rule that the
+  text must stay fluent was met at some strength for only 2 of the 5 pre-chosen features, so the pre-registered claim
+  ("at least 3 of 5") is **not established**.
+- **Caveats that matter:** "concept rate" counts whole words, so high strengths that produce word-salad can still score as a
+  success on that metric (the fluency rule is there to catch it); the labeler and the label-checker are the same model; the five
+  features were chosen by a fixed seeded walk, with my judgment on which labels name a concept; the base model was not steered.
+- Full write-ups: `docs/steering_features.md` (features, tables, controls), `docs/decisions.md` (each phase, with provenance), raw
+  verdicts `docs/phase6_steering_verdict.json`.
+
+## Reproduce the Phase 6 pieces
+
+```powershell
+python -m pytest tests/ -q                                  # 171 tests
+python analysis/a5_transfer.py --help                       # SAE transfer to the SFT model (CPU, about 3 h for both models)
+python analysis/scan_features.py --help                     # feature scan (CPU, about 1 h per 10M tokens)
+python analysis/steering.py gen --help                      # steering cells (GPU strongly advised: about 3 h on a T4)
+python analysis/steering.py analyze --out_dir <dir>         # pre-registered verdict
+```
+Checkpoints are not in git (`.pt` files): the SAE, base and SFT weights are pinned by SHA-256 in the scripts and docs.
+
+---
+
+# Setup and older notes (Phases 0-5)
 Repo root is this folder (`Portfolio Project/` acts as `minigpt-stack/` from the spec).
 
 ## Setup (Windows, Python 3.13, i3 + 8GB RAM)

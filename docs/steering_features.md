@@ -80,3 +80,42 @@ look/be"); 3694 and 3589 were labeled and blind-checked as reserves (both 20/20)
   (2) 1131 and 3651 fire mostly on function words next to the concept (they, it, of, had), so steering them may raise
   concept words less directly than 1672, 1319 or 3990; (3) 1319 mixes two concepts (foods and farm animals).
 - Words that are also one of a prompt's three keywords are excluded for that prompt (pre-registered rule).
+
+## Result (kernel `priyanshgaur/glassbox-steering-full` v1, commit `4a8cddb`, 2026-11-10)
+
+Pre-registered run, nothing changed after seeing data: SFT model, layer 4, 5 features, 50 validation prompts x n=8, max_new
+256, T 0.8, top-k 40, scales {1,2,4,8}, 3 random same-norm controls, s=-2, ablation. 4550 cells, 11,678 s on a T4 (3.24 GPU h).
+SHA-256 gates MATCH (SFT `d043156e...`, SAE `bd9ec5e3...`). Full numbers: `docs/phase6_steering_verdict.json`.
+
+**Verdict: steering effect NOT established - 2 of 5 features succeed (need >= 3).**
+
+| feature | concept | succeeded | working scale | why not (if failed) |
+|---|---|---|---|---|
+| 3651 | household furniture | yes | 4 | - |
+| 1131 | night sky | yes | 2 | - |
+| 1672 | clothing | **no** | none | huge effect, fluency rule (d) fails at every scale |
+| 1319 | foods and animals | no | none | gain 0.076 at scale 4 (< 0.10), and fluency fails there |
+| 3990 | animal as subject | no | none | no effect (gain <= 0.024) |
+
+Concept-rate gain over the random control (feature minus random; baseline concept rate is 0.007-0.075):
+
+| feature | s=1 | s=2 | s=4 | s=8 | s=-2 vs baseline | ablation vs baseline |
+|---|---|---|---|---|---|---|
+| 3651 | +0.022 | +0.074 | +0.149 | +0.399 | -0.010 | 0.000 |
+| 1131 | +0.028 | +0.213 | +0.657 | +0.908 | -0.007 | -0.003 |
+| 1672 | +0.658 | +0.935 | +0.999 | +1.000 | -0.015 | -0.007 |
+| 1319 | +0.003 | +0.026 | +0.076 | -0.011 | -0.010 | 0.000 |
+| 3990 | +0.011 | +0.024 | +0.016 | 0.000 | -0.030 | +0.003 |
+
+Fluency at the working scale (baseline: eot 0.922, distinct-2 0.360, perplexity 2.41): 3651 at s=4: eot 0.945, distinct-2 0.318,
+perplexity ratio 1.18; 1131 at s=2: eot 0.917, distinct-2 0.331, ratio 1.08.
+
+- **Clothing (1672) is the clearest case of "works but breaks the text".** At s=1 the concept rate is 0.68 against 0.02 for the
+  random control, but distinct-2 falls from 0.360 to 0.306 (limit: a fall of at most 0.05, missed by 0.004). At s=2 end-of-text rate is
+  0.46 and the perplexity ratio 3.8. The pre-registered scale grid has nothing between 0 and 1, so no scale passes. We do not
+  re-grade this feature as a success; the finer scale was not pre-registered.
+- **Controls behave:** the random same-norm direction never raises the concept rate, s=-2 never raises it, and ablation changes it by
+  at most 0.007. Ablation is nearly uninformative here because the baseline concept rate is about 1%.
+- **Concept rate is a keyword count** (whole words, the prompt's own three keywords excluded), so it measures "these words appear",
+  not that the story is about the concept. High scales produce word-salad that contains the words (see s=8 for 1672).
+- Not tested: other layers, other prompt templates, features beyond these five, and the base model.

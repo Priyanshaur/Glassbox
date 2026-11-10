@@ -1,0 +1,89 @@
+{
+ "shas": {
+  "sae": "bd9ec5e3192861b16b9976eb3050077e959debb611f051dc382c494e64a502e9",
+  "weights": "d043156ee2d23aed1336cb42c80efe8cd603c40421a469d4d9519d230cbc3a5c"
+ },
+ "layer": 4,
+ "act_scale": 0.3437995039480051,
+ "n_prompts": 50,
+ "n": 8,
+ "max_new": 256,
+ "temperature": 0.8,
+ "top_k": 40,
+ "features": {
+  "1319": [
+   2.97,
+   [
+    "apples",
+    "bananas",
+    "carrots",
+    "oranges",
+    "cheese",
+    "cows",
+    "pigs",
+    "chickens",
+    "horses"
+   ]
+  ],
+  "3651": [
+   1.72,
+   [
+    "vase",
+    "bookcase",
+    "bookshelf",
+    "couch",
+    "ceiling",
+    "shelf"
+   ]
+  ],
+  "1672": [
+   6.36,
+   [
+    "shirt",
+    "coat",
+    "jacket",
+    "sweater",
+    "suit",
+    "pants"
+   ]
+  ],
+  "1131": [
+   2.26,
+   [
+    "stars",
+    "moon",
+    "twinkling",
+    "dots"
+   ]
+  ],
+  "3990": [
+   3.31,
+   [
+    "crocodile",
+    "alligator",
+    "kangaroo",
+    "tiger",
+    "turtle",
+    "hippo",
+    "ostrich",
+    "bear",
+    "wolf",
+    "frog",
+    "spider"
+   ]
+  ]
+ },
+ "scales": [
+  1,
+  2,
+  4,
+  8
+ ],
+ "random_seeds": [
+  101,
+  102,
+  103
+ ],
+ "commit": "4a8cddb",
+ "smoke": false
+}
