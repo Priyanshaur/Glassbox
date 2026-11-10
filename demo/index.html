@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Glassbox steering demo</title>
+<style>
+:root{--bg:#fafaf7;--fg:#1c1c1c;--mut:#666;--card:#fff;--line:#ddd;--warn:#fff4d6;--warnl:#e2c14a;--hi:#ffe08a}
+@media (prefers-color-scheme:dark){:root{--bg:#161616;--fg:#eee;--mut:#aaa;--card:#202020;--line:#383838;--warn:#3a3217;--warnl:#8a7326;--hi:#6b5a1c}}
+body{font:16px/1.5 system-ui,sans-serif;background:var(--bg);color:var(--fg);margin:0;padding:16px;max-width:980px;margin-inline:auto}
+h1{font-size:1.4rem;margin:.2rem 0}
+.note{background:var(--warn);border:1px solid var(--warnl);border-radius:8px;padding:10px 12px;margin:12px 0}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px;margin:12px 0}
+label{display:block;margin:.5rem 0 .2rem;font-weight:600}
+input[type=text],select{width:100%;padding:8px;box-sizing:border-box;font:inherit}
+input[type=range]{width:100%}
+button{padding:10px 16px;font:inherit;cursor:pointer}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media(max-width:700px){.grid{grid-template-columns:1fr}}
+.mut{color:var(--mut);font-size:.9rem}
+mark{background:var(--hi);color:inherit;padding:0 2px}
+.story{white-space:pre-wrap}
+.tag{display:inline-block;font-size:.8rem;border:1px solid var(--line);border-radius:6px;padding:0 6px;margin-left:6px}
+</style></head><body>
+<h1>Glassbox: steer a small story model with one SAE feature</h1>
+<div class="mut">A 31.5M-parameter model (SFT) writes a story from three words. The right side adds one learned direction to its layer-4 activations at every step. Runs locally on CPU.</div>
+<div class="note" id="note"><b>Read this first.</b> <span id="notetext"></span></div>
+<div class="card">
+  <label for="feat">Feature (only features that passed the test)</label>
+  <select id="feat"></select>
+  <div class="mut" id="featinfo"></div>
+  <label for="words">Three words for the story (comma separated)</label>
+  <input type="text" id="words" value="dog, park, happy">
+  <label for="scale">Strength: <span id="sv">0</span> <span class="mut" id="range"></span></label>
+  <input type="range" id="scale" min="0" max="4" step="0.1" value="0">
+  <label for="seed">Seed</label>
+  <input type="text" id="seed" value="0">
+  <p><button id="go">Generate (about 10-40 s on CPU)</button> <span class="mut" id="status"></span></p>
+</div>
+<div class="grid">
+  <div class="card"><b>Unsteered</b><span class="tag" id="bc"></span><div class="story" id="base">-</div></div>
+  <div class="card"><b>Steered</b><span class="tag" id="sc"></span><div class="story" id="steer">-</div></div>
+</div>
+<div class="card" id="evidence"></div>
+<script>
+let F = [];
+const $ = id => document.getElementById(id);
+function esc(t) { return t.replace(/[&<>]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;'}[c])); }
+function mark(t, words) {
+  let h = esc(t);
+  for (const w of words) h = h.replace(new RegExp('\\b' + w + '\\b', 'gi'), m => '<mark>' + m + '</mark>');
+  return h;
+}
+function cur() { return F.find(f => f.feature == $('feat').value); }
+function refresh() {
+  const f = cur(); if (!f) return;
+  $('scale').max = f.max_scale; $('scale').value = 0; $('sv').textContent = '0';
+  $('range').textContent = `(tested up to ${f.validated_scale}; the slider goes to ${f.max_scale}; beyond ${f.validated_scale} the text degrades)`;
+  $('featinfo').textContent = 'Concept words counted: ' + f.concept_words.join(', ');
+  const m = f.measured, p = x => (100 * x).toFixed(0) + '%';
+  $('evidence').innerHTML = `<b>Evidence for this feature (pre-registered run: 50 held-out prompts x 8 stories)</b><br>` +
+    `At strength ${f.validated_scale}: concept words appear in ${p(m.concept_rate_steered)} of stories, against ` +
+    `${p(m.concept_rate_random_control)} with a random direction of the same size and ${p(m.baseline_concept_rate)} unsteered ` +
+    `(gain ${m.gain.toFixed(2)}, 95% CI ${m.gain_ci95[0].toFixed(2)} to ${m.gain_ci95[1].toFixed(2)}). ` +
+    `Stories still ending: ${p(m.end_of_story_rate)}; perplexity ratio ${m.perplexity_ratio.toFixed(2)} (limit 1.25).<br>` +
+    `<span class="mut">"Concept rate" counts whole words, so it shows the words appear, not that the story is about the concept. Higher strengths make the text worse.</span>`;
+}
+$('scale').oninput = () => { $('sv').textContent = $('scale').value; };
+$('feat').onchange = refresh;
+$('go').onclick = async () => {
+  const f = cur(); $('status').textContent = 'generating...'; $('go').disabled = true;
+  try {
+    const r = await fetch('/api/generate', {method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({feature: f.feature, scale: +$('scale').value, words: $('words').value, seed: +$('seed').value || 0})});
+    const j = await r.json();
+    if (!r.ok) { $('status').textContent = j.error || 'error'; return; }
+    $('base').innerHTML = mark(j.baseline, f.concept_words); $('steer').innerHTML = mark(j.steered, f.concept_words);
+    $('bc').textContent = j.baseline_concept_words.length + ' concept words';
+    $('sc').textContent = j.steered_concept_words.length + ' concept words' + (j.beyond_validated_range ? ' - beyond tested range' : '');
+    $('status').textContent = '';
+  } catch (e) { $('status').textContent = 'failed: ' + e; } finally { $('go').disabled = false; }
+};
+fetch('/api/features').then(r => r.json()).then(j => {
+  F = j.offered; $('notetext').textContent = j.note + ' Overall verdict: ' + j.claim + '.';
+  $('feat').innerHTML = F.map(f => `<option value="${f.feature}">${f.name} (feature ${f.feature})</option>`).join('');
+  refresh();
+});
+</script></body></html>

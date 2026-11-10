@@ -34,6 +34,16 @@ rule is reported as a failure.
 - Full write-ups: `docs/steering_features.md` (features, tables, controls), `docs/decisions.md` (each phase, with provenance), raw
   verdicts `docs/phase6_steering_verdict.json`.
 
+## Demo (local, CPU)
+
+```powershell
+python -m demo.app          # http://127.0.0.1:8000
+```
+A page with a strength slider for the two steering features that passed the pre-registered test (night sky, household furniture).
+It writes the same story twice with the same seed, unsteered and steered, and marks the concept words. A note at the top says the
+other three features (clothing, foods and animals, an animal as subject) did not show a usable effect and are not offered, and
+that the overall claim is "not established". Beyond the tested strength the page warns that text degrades.
+
 ## Reproduce the Phase 6 pieces
 
 ```powershell
