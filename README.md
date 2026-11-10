@@ -5,7 +5,7 @@ A 31.5M-parameter GPT trained from scratch on TinyStories (own BPE tokenizer, ow
 autoencoder (SAE)** on one layer's activations ("Glassbox"): can individual SAE features be read as concepts, and can they be used to
 steer the model's stories? Heavy training ran on free Kaggle T4 GPUs; everything else ran on an i3 / 8 GB Windows laptop (CPU).
 
-**Status: complete for the agreed scope.** All code, experiments and write-ups are in this repo (176 tests pass with the local data and checkpoints; see Setup for a fresh clone). Open items are listed at
+**Status: complete for the agreed scope.** All code, experiments and write-ups are in this repo (178 tests pass with the local data and checkpoints; see Setup for a fresh clone). Open items are listed at
 the end. The results are mixed, and this README says where they are weak.
 
 ## Results at a glance
@@ -47,7 +47,7 @@ interp/       SAE, activation extraction, SAE training and evaluation, feature s
 analysis/     Phase 6 experiments: A5 transfer, feature scan, labeling and blind check, steering, notebook generators and checkers
 demo/         local steering demo (Starlette + one HTML page)
 notebooks/    Kaggle notebooks (pretrain, SFT, DPO, bench, SAE probe and full run, steering)
-tests/        176 tests (see Setup)  docs/       decisions log, results, pre-registration, benchmark write-ups
+tests/        178 tests (see Setup)  docs/       decisions log, results, pre-registration, benchmark write-ups
 ```
 Checkpoints (`*.pt`) are not in git. The SAE, base and SFT weights are pinned by SHA-256 in the scripts and docs.
 
@@ -61,7 +61,7 @@ python -m data.prepare --out_dir data --max_docs 1000       # small debug shards
 python -m pytest tests/ -q
 ```
 - **On a fresh clone the suite needs `data.prepare` first.** Without the shards 28 tests fail with `FileNotFoundError: data\meta.json`;
-  with them, 170 pass and 6 skip (the skips need the real SFT checkpoint, which is not in git). With all local data and checkpoints present, all 176 pass.
+  with them, 172 pass and 6 skip (the skips need the real SFT checkpoint, which is not in git). With all local data and checkpoints present, all 178 pass.
 - The tests were developed with torch 2.9 (CPU); a fresh install picks the newest torch (2.15 passed the same suite).
 - `make install` / `make test` work too if `make` is installed (Git Bash / WSL).
 
