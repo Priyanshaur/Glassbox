@@ -143,3 +143,14 @@ def test_recording_under_the_static_cache_matches_full_forward_rows():
         for t in range(5, 12):
             rows.append(m(x[:, t:t + 1], past_kvs=cache.layers, pos_offset=t, record_layers=[1]).recorded[1])
     assert torch.allclose(full, torch.cat(rows, dim=1), atol=1e-5, rtol=1e-5)
+
+
+def test_inject_vector_is_cast_to_the_residuals_dtype_and_device():
+    """gpt.py used to add the vector as given: a float64 (or CPU-vs-GPU) vector broke or upcast the forward."""
+    m = debug_model()
+    x = ids()
+    v32 = torch.randn(m.cfg["d_model"], generator=torch.Generator().manual_seed(1))
+    with torch.no_grad():
+        want = m(x, inject={0: v32}).logits
+        got = m(x, inject={0: v32.double()}).logits
+    assert got.dtype == torch.float32 and torch.allclose(got, want, atol=1e-6)

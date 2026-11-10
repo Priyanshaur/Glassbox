@@ -178,7 +178,8 @@ def main():
             scaler.scale(loss).backward()
         step_loss = float(loss_sum)
         scaler.unscale_(opt)
-        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0).item()
+        grad_norm = torch.nn.utils.clip_grad_norm_(
+            model.parameters(), cfg["train"].get("grad_clip", 1.0)).item()
         prev_scale = scaler.get_scale()
         scaler.step(opt)
         scaler.update()

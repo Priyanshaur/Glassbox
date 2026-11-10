@@ -89,7 +89,9 @@ class GPT(nn.Module):
                     # delta computed from the residual itself (e.g. feature ablation)
                     x = x + v(x)
                 else:
-                    # (d,) broadcast over batch+time, or exact (B,T,d).
+                    # (d,) broadcast over batch+time, or exact (B,T,d). Moved to the residual's device and
+                    # dtype so a CPU / float32 vector cannot break (or silently upcast) a GPU / fp16 forward.
+                    v = v.to(device=x.device, dtype=x.dtype)
                     x = x + (v.view(1, 1, -1) if v.dim() == 1 else v)
             if i in rec:
                 recorded[i] = x.clone()

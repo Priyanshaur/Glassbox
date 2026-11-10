@@ -201,3 +201,29 @@ def test_resume_matches_straight_run(tmp_path):
     assert len(straight) == len(resumed) == 8
     for a, b in zip(straight, resumed):
         assert abs(a - b) < 1e-6, f"{a} vs {b}"
+
+
+def test_pretrain_uses_the_configs_grad_clip(tmp_path, monkeypatch):
+    """train.pretrain hard-coded 1.0 and ignored train.grad_clip; the config value must reach clip_grad_norm_."""
+    import sys
+    from common import config as cfgmod
+    from train import pretrain
+    real_load = pretrain.load_config
+
+    def load(path):
+        c = real_load(path)
+        c["train"]["grad_clip"] = 0.37
+        c["train"]["warmup_steps"] = 1
+        return c
+    seen = []
+    real_clip = torch.nn.utils.clip_grad_norm_
+
+    def spy(params, max_norm, *a, **k):
+        seen.append(max_norm)
+        return real_clip(params, max_norm, *a, **k)
+    monkeypatch.setattr(pretrain, "load_config", load)
+    monkeypatch.setattr(torch.nn.utils, "clip_grad_norm_", spy)
+    monkeypatch.setattr(sys, "argv", ["pretrain", "--config", "configs/debug_cpu.yaml", "--resume", "none",
+                                      "--max_steps", "2", "--ckpt_dir", str(tmp_path / "ck")])
+    assert pretrain.main() == 0
+    assert seen and set(seen) == {0.37}
