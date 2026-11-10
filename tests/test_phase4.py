@@ -526,6 +526,30 @@ def test_eval_quality_smoke_reports_gold_ppl(tmp_path, monkeypatch):
     assert s["gold_ppl"] > 1 and math.isfinite(s["ppl_sft"])
 
 
+def test_eval_quality_engine_sampler_matches_old_except_the_first_token_quirk(tmp_path, monkeypatch):
+    """--sampler engine runs end to end, the default stays the old sampler, and the engine in replay mode equals the old one."""
+    import json
+    import sys
+    from train import eval_quality
+    from train.sample import sample_completions
+    from inference.generate import Generator
+    cfg = load_config("configs/debug_cpu.yaml")["model"]
+    torch.manual_seed(0)
+    torch.save(GPT(cfg).state_dict(), tmp_path / "w.pt")
+    for mode in ("old", "engine"):
+        out = tmp_path / f"{mode}.jsonl"
+        argv = ["eval_quality", "--config", "configs/debug_cpu.yaml", "--weights", str(tmp_path / "w.pt"),
+                "--ppl_weights", str(tmp_path / "w.pt"), "--out", str(out), "--n_prompts", "3", "--n_samples", "2", "--max_new", "8"]
+        monkeypatch.setattr(sys, "argv", argv + (["--sampler", "engine"] if mode == "engine" else []))
+        assert eval_quality.main() == 0
+        assert json.load(open(str(out) + ".summary.json", encoding="utf-8"))["sampler"] == mode
+    m = GPT(cfg).eval()
+    tk = BPETokenizer.load(load_config("configs/debug_cpu.yaml")["data"]["tokenizer_path"])
+    want, _ = sample_completions(m, tk, "Once upon a time", n=2, max_new=10, seed=5, return_flags=True)
+    got = Generator(m, tk).generate("Once upon a time", n=2, max_new=10, top_k=50, seed=5, replay_last_prompt_token=True)
+    assert got.texts == want                     # replay mode reproduces the old sampler exactly
+
+
 def test_win_rate_graded_score_and_smoke(tmp_path, monkeypatch):
     """win_rate scores with the pair rule (EOT-ended, 10-500 words, whole-word
     coverage) and runs end to end on the debug model."""

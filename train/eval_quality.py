@@ -87,6 +87,10 @@ def main():
     ap.add_argument("--temperature", type=float, default=0.8)
     ap.add_argument("--top_k", type=int, default=40)
     ap.add_argument("--label", default="")
+    ap.add_argument("--sampler", choices=["old", "engine"], default="old",
+                    help="old = train.sample.sample_completions (re-feeds the last prompt token; what the published "
+                         "numbers used). engine = inference.generate.Generator in its correct mode (same RNG op order, "
+                         "same per-prompt seeds).")
     args = ap.parse_args()
 
     cfg = load_config(args.config)
@@ -99,6 +103,10 @@ def main():
     model.load_state_dict(torch.load(args.weights, map_location=device,
                                      weights_only=True))
     model.eval()
+    engine = None
+    if args.sampler == "engine":
+        from inference.generate import Generator
+        engine = Generator(model, tok, device=device)          # default replay_last_prompt_token=False: the correct first token
     scorer = GPT(mcfg).to(device)
     scorer.load_state_dict(torch.load(args.ppl_weights, map_location=device,
                                       weights_only=True))
@@ -118,10 +126,15 @@ def main():
             gn, gt = mean_nll(model, tok, prompt, gold, ctx, device)
             gold_nll_sum += gn * gt
             gold_tok_sum += gt
-            texts, flags = sample_completions(
-                model, tok, prompt, n=args.n_samples, max_new=args.max_new,
-                temperature=args.temperature, top_k=args.top_k,
-                seed=i, device=device, return_flags=True)
+            if args.sampler == "old":
+                texts, flags = sample_completions(
+                    model, tok, prompt, n=args.n_samples, max_new=args.max_new,
+                    temperature=args.temperature, top_k=args.top_k,
+                    seed=i, device=device, return_flags=True)
+            else:
+                res = engine.generate(prompt, n=args.n_samples, max_new=args.max_new, temperature=args.temperature,
+                                      top_k=args.top_k, seed=i)
+                texts, flags = res.texts, [{"eot_hit": e} for e in res.eot_hit]
             rows = []
             for t, fl in zip(texts, flags):
                 cov = whole_word_count(t, kw)
@@ -144,7 +157,7 @@ def main():
 
     n = len(prompts) * args.n_samples
     summary = {
-        "label": args.label or os.path.basename(args.weights),
+        "label": args.label or os.path.basename(args.weights), "sampler": args.sampler,
         "weights": args.weights,
         "n_prompts": len(prompts), "n_samples_per_prompt": args.n_samples,
         "cov3": sum_cov / n, "full3_rate": n_full3 / n, "eot_rate": n_eot / n,

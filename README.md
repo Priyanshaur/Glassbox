@@ -12,7 +12,7 @@ sparse autoencoder (SAE) on the layer-4 residual stream. Heavy training ran on K
 | SAE transfer to the SFT model (A5) | **Passed**: FVU 0.144 plain / 0.158 template (limit 0.25), CE recovered 0.982 / 0.982 (limit 0.80) | `docs/decisions.md`, `docs/phase6_a5_report.json` |
 | Feature labels | Most of 60 random features are token or phrase patterns ("to" after "didn't want"), not concepts. A blind check scored 60/60, which is weak evidence (random controls, same model labels and scores) | `docs/decisions.md` |
 | **Steering (pre-registered)** | **Effect not established: 2 of 5 concept features pass** (furniture, night sky). Clothing has the biggest effect but breaks fluency at every tested strength | `docs/steering_features.md` |
-| DPO | Keyword coverage +0.8 of 3 but end-of-story rate falls 93% -> 79-81% (missed its 85% guardrail). **Not an overall win**; no human evaluation | `docs/results_final.md` |
+| DPO | Keyword coverage +0.8 to +0.9 of 3 but end-of-story rate falls 92-93% -> 76-78% (missed its 85% guardrail). **Not an overall win**; no human evaluation. Re-checked with the corrected sampler: same result | `docs/results_final.md`, `docs/results_corrected_sampler.md` |
 | Inference | KV cache 2-8x faster than recomputing; int8 weights shrink the file 4x (+0.04% perplexity) but are slower on CPU; fp16 on a T4 passes its quality gate; decode on the T4 is launch-bound | `docs/benchmark_*.md`, `docs/quantization_results.md` |
 
 Every threshold above was written down before the run (`docs/phase6_preregistration.md`) and not changed afterwards. A failed
@@ -159,8 +159,10 @@ so a dead Kaggle session resumes with a continuous loss curve. See `docs/decisio
   and `win_rate` generation metrics, the final-run results and the spot-check
   samples. It does not affect DPO training or held-out losses, SFT/pretraining,
   or perplexity. SFT and DPO were sampled the same way, so their comparison is
-  consistent, but absolute `eot_rate` / coverage values are slightly off. Not
-  fixed and not re-evaluated yet (see `docs/decisions.md`).
+  consistent. **Re-evaluated on 2026-11-10** with the corrected sampler
+  (`docs/results_corrected_sampler.md`): coverage gain +0.79 / +0.90, `eot_rate`
+  change -15.8 / -13.8 points, same conclusions. Not redone: the preference
+  pairs DPO trained on were still built with the old sampler (needs a GPU).
 
 ## DPO learning rate
 

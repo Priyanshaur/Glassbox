@@ -404,3 +404,14 @@ fluency rule at every pre-registered scale (distinct-2 falls 0.054 at s=1, limit
 Details and tables: `docs/steering_features.md` (Result), raw verdicts `docs/phase6_steering_verdict.json`. Raw samples (30 MB) are in
 `checkpoints/glassbox-steering-full/cells.jsonl` (git-ignored). Probe v1 and v2 of this kernel failed on my notebook/harness bugs (test needing
 `data/meta.json`; random controls on the CPU) and were fixed; v3 ran clean. Quota: about 3.4 GPU h used this week.
+
+
+## Sampler double-feed audit and corrected DPO re-evaluation (2026-11-10)
+
+Audit: the old sampler's quirk affects the DPO generation metrics, the pairs DPO trained on, `bench/win_rate.py` and the spot-check
+samples; it does not affect gold-story perplexity, DPO/SFT/pretraining losses, any benchmark or the quantization generation check (new
+engine), or any Phase 6 number (steering uses the engine's default correct mode). Re-ran the DPO generation evaluation on CPU with
+`--sampler engine` (SFT + both DPO seeds, 100 prompts x 6): conclusions unchanged (DPO minus SFT coverage +0.79 / +0.90, `eot_rate`
+-15.8 / -13.8 points, still below the 85% guardrail). Details: `docs/results_corrected_sampler.md`. Not redone: the pairs and the DPO
+retraining (GPU, roughly 1-2 h, unmeasured). The default of `train/eval_quality.py` stays the old sampler so published numbers stay
+reproducible.
