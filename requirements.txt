@@ -10,7 +10,7 @@ pyyaml>=6.0.2
 pytest>=8.3
 # Inference server (inference/server.py) is built on Starlette + pydantic directly, not
 # FastAPI: the machine it was developed on had FastAPI 0.115.6 next to Starlette 1.8.0,
-# which cannot construct an app. These are the versions the test suite (178 tests) ran against.
+# which cannot construct an app. These are the versions the test suite (181 tests) ran against.
 # httpx is only needed by Starlette's TestClient in tests/test_server.py.
 starlette==1.8.0
 pydantic==2.10.4

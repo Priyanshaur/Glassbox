@@ -1,0 +1,2 @@
+# Only needed by analysis/plot_loss.py (not by the model, the tests or the experiments).
+matplotlib>=3.9

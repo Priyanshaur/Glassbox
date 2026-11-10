@@ -5,7 +5,7 @@ A 31.5M-parameter GPT trained from scratch on TinyStories (own BPE tokenizer, ow
 autoencoder (SAE)** on one layer's activations ("Glassbox"): can individual SAE features be read as concepts, and can they be used to
 steer the model's stories? Heavy training ran on free Kaggle T4 GPUs; everything else ran on an i3 / 8 GB Windows laptop (CPU).
 
-**Status: complete for the agreed scope.** All code, experiments and write-ups are in this repo (178 tests pass with the local data and checkpoints; see Setup for a fresh clone). Open items are listed at
+**Status: complete for the agreed scope.** All code, experiments and write-ups are in this repo (181 tests pass with the local data and checkpoints; see Setup for a fresh clone). Open items are listed at
 the end. The results are mixed, and this README says where they are weak.
 
 ## Results at a glance
@@ -23,6 +23,11 @@ Every number is from this repo's docs; limits are stated next to it. Pass/fail r
 | SAE transfer to the SFT model (A5) | **Passed**: FVU 0.144 plain / 0.158 template (limit 0.25), CE recovered 0.982 / 0.982 (limit 0.80) | `docs/decisions.md`, `docs/phase6_a5_report.json` |
 | Feature labels | Most of 60 random features are token or phrase patterns ("to" after "didn't want"), not concepts. A blind check scored 60/60, which is weak evidence (random controls; the same model writes and scores the labels) | `docs/decisions.md` |
 | **Steering (pre-registered)** | **Effect not established: 2 of 5 concept features pass** (night sky, furniture). Clothing has the biggest effect but breaks the text's fluency at every tested strength | `docs/steering_features.md` |
+
+![Pretraining loss curve](docs/figures/pretrain_loss.png)
+
+*Pretraining loss (log scale): training loss every 50 steps and validation loss on fixed windows every 1,000 steps; validation 1.294 at step 12,000.
+Regenerate with `pip install -r requirements-plots.txt` then `python analysis/plot_loss.py` (needs `checkpoints/**/metrics.jsonl`, which is not in git).*
 
 ## How the project is built (phases)
 
@@ -47,9 +52,9 @@ interp/       SAE, activation extraction, SAE training and evaluation, feature s
 analysis/     Phase 6 experiments: A5 transfer, feature scan, labeling and blind check, steering, notebook generators and checkers
 demo/         local steering demo (Starlette + one HTML page)
 notebooks/    Kaggle notebooks (pretrain, SFT, DPO, bench, SAE probe and full run, steering)
-tests/        178 tests (see Setup)  docs/       decisions log, results, pre-registration, benchmark write-ups
+tests/        181 tests (see Setup)  docs/       decisions log, results, pre-registration, benchmark write-ups
 ```
-Checkpoints (`*.pt`) are not in git. The SAE, base and SFT weights are pinned by SHA-256 in the scripts and docs.
+Licensed under MIT (`LICENSE`). Checkpoints (`*.pt`) are not in git. The SAE, base and SFT weights are pinned by SHA-256 in the scripts and docs.
 
 ## Setup and tests (Windows, Python 3.13)
 
@@ -61,8 +66,10 @@ python -m data.prepare --out_dir data --max_docs 1000       # small debug shards
 python -m pytest tests/ -q
 ```
 - **On a fresh clone the suite needs `data.prepare` first.** Without the shards 28 tests fail with `FileNotFoundError: data\meta.json`;
-  with them, 172 pass and 6 skip (the skips need the real SFT checkpoint, which is not in git). With all local data and checkpoints present, all 178 pass.
-- The tests were developed with torch 2.9 (CPU); a fresh install picks the newest torch (2.15 passed the same suite).
+  with them, 174 pass and 7 skip (6 skips need the real SFT checkpoint, which is not in git; 1 is the plot test, which needs matplotlib). With all local data and checkpoints present, all 181 pass.
+- The tests were developed with torch 2.9 (CPU). A fresh install picks the newest torch (2.15): on a clean clone it passed the same suite, but with the
+  real SFT checkpoint present one float-tolerance test (`test_static_cache_real_sft_model_matches_full_forward_and_tuple_cache`, max difference 1.47e-5
+  against a 1e-5 limit) failed on 2.15. Use torch 2.9 to reproduce the full pass.
 - `make install` / `make test` work too if `make` is installed (Git Bash / WSL).
 
 ### Smallest end-to-end path (CPU, a few minutes; every command below was run on a fresh clone)
