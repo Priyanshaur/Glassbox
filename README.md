@@ -1,103 +1,137 @@
 # MiniGPT-Stack + Glassbox: a small LLM built from scratch, then opened up with a sparse autoencoder
 
-A 31.5M-parameter GPT (8 blocks, d_model 512, context 512, 8192-token BPE) trained from scratch on TinyStories, then
-instruction-tuned (SFT), preference-tuned (DPO), served by an inference stack and HTTP server, and finally examined with a
-sparse autoencoder (SAE) on the layer-4 residual stream. Heavy training ran on Kaggle T4s; analysis ran on a laptop CPU.
+A 31.5M-parameter GPT trained from scratch on TinyStories (own BPE tokenizer, own training loop), then instruction-tuned
+(SFT), preference-tuned (DPO), served by an inference stack and a small HTTP server, and finally examined with a **sparse
+autoencoder (SAE)** on one layer's activations ("Glassbox"): can individual SAE features be read as concepts, and can they be used to
+steer the model's stories? Heavy training ran on free Kaggle T4 GPUs; everything else ran on an i3 / 8 GB Windows laptop (CPU).
 
-## Results at a glance (all numbers are from this repo's docs; limits are stated next to each)
+**Status: complete for the agreed scope.** All code, experiments and write-ups are in this repo (176 tests pass). Open items are listed at
+the end. The results are mixed, and this README says where they are weak.
+
+## Results at a glance
+
+Every number is from this repo's docs; limits are stated next to it. Pass/fail rules for Phase 6 were written down **before** the runs
+(`docs/phase6_preregistration.md`) and not changed afterwards. A failed rule is reported as a failure.
 
 | Part | Result | Where |
 |---|---|---|
-| SAE reconstruction (layer 4, F=4096, k=32) | FVU 0.1413 (limit 0.15, **thin margin**), L0 32 (by construction), dead features 0.0, CE recovered 0.983 (limit 0.85) | `docs/decisions.md`, `docs/phase6_preregistration.md` |
+| Pretraining | 31,465,984 parameters, 12,158 steps (about 0.8B tokens, about 1.7 passes over TinyStories), validation loss **1.294**, about 8.8 GPU hours on a T4 | `docs/decisions.md` |
+| SFT | Complete stories that end with an end-of-text token (93% of samples); keyword coverage 0.89 of 3 | `docs/results_final.md` |
+| DPO | Keyword coverage **+0.8 to +0.9 of 3**, but end-of-story rate falls 92-93% -> 76-78% (missed its 85% guardrail). **Not an overall win**; no human evaluation. Re-checked with the corrected sampler: same result | `docs/results_final.md`, `docs/results_corrected_sampler.md` |
+| Inference | KV cache 2-8x faster than recomputing; int8 weights shrink the file 4x (+0.04% perplexity) but are slower on CPU; fp16 on a T4 passes its quality gate; T4 decode is launch-bound | `docs/benchmark_*.md`, `docs/quantization_results.md` |
+| SAE reconstruction (layer 4, 4096 features, k=32) | FVU 0.1413 (limit 0.15, **thin margin**), L0 32 (by construction), dead features 0.0, CE recovered 0.983 (limit 0.85) | `docs/decisions.md`, `docs/phase6_preregistration.md` |
 | SAE transfer to the SFT model (A5) | **Passed**: FVU 0.144 plain / 0.158 template (limit 0.25), CE recovered 0.982 / 0.982 (limit 0.80) | `docs/decisions.md`, `docs/phase6_a5_report.json` |
-| Feature labels | Most of 60 random features are token or phrase patterns ("to" after "didn't want"), not concepts. A blind check scored 60/60, which is weak evidence (random controls, same model labels and scores) | `docs/decisions.md` |
-| **Steering (pre-registered)** | **Effect not established: 2 of 5 concept features pass** (furniture, night sky). Clothing has the biggest effect but breaks fluency at every tested strength | `docs/steering_features.md` |
-| DPO | Keyword coverage +0.8 to +0.9 of 3 but end-of-story rate falls 92-93% -> 76-78% (missed its 85% guardrail). **Not an overall win**; no human evaluation. Re-checked with the corrected sampler: same result | `docs/results_final.md`, `docs/results_corrected_sampler.md` |
-| Inference | KV cache 2-8x faster than recomputing; int8 weights shrink the file 4x (+0.04% perplexity) but are slower on CPU; fp16 on a T4 passes its quality gate; decode on the T4 is launch-bound | `docs/benchmark_*.md`, `docs/quantization_results.md` |
+| Feature labels | Most of 60 random features are token or phrase patterns ("to" after "didn't want"), not concepts. A blind check scored 60/60, which is weak evidence (random controls; the same model writes and scores the labels) | `docs/decisions.md` |
+| **Steering (pre-registered)** | **Effect not established: 2 of 5 concept features pass** (night sky, furniture). Clothing has the biggest effect but breaks the text's fluency at every tested strength | `docs/steering_features.md` |
 
-Every threshold above was written down before the run (`docs/phase6_preregistration.md`) and not changed afterwards. A failed
-rule is reported as a failure.
+## How the project is built (phases)
+
+| Phase | What | Key facts |
+|---|---|---|
+| 1 Data and tokenizer | Byte-level BPE trained from scratch, `tok8192.json`; TinyStories streamed into resumable uint16 shards | vocab 8192 (bytes 0-255, `<|endoftext|>` 256, `<|pad|>` 257); official validation split; about 467M train tokens in 5 shards |
+| 2 Model | Decoder-only GPT: RoPE, RMSNorm, SwiGLU (hidden 1536), tied embeddings, 8 blocks, d_model 512, context 512 | 31,465,984 parameters; record/inject hook at the output of any block (used by Phase 6) |
+| 3 Pretraining | Resumable trainer (checkpoints, kill-and-resume drill, fp16 with GradScaler), run in three Kaggle sessions | LR 1e-3 (sweep 3e-4 / 6e-4 / 1e-3), warmup 500, 65,536 tokens per step, about 39.6k tokens/s |
+| 4 SFT and DPO | Instruction prompts synthesized from stories ("Write a short story using all of these words: a, b, c"); graded-rule preference pairs; hand-written DPO loss | no instruction dataset was verified, so prompts are synthetic; DPO lr 5e-6, beta 0.1, 2 seeds |
+| 5 Inference | Static KV cache, generation engine, int8 / fp16 variants, HTTP server (Starlette), benchmarks on CPU and T4 | see "Inference" below |
+| 6 Glassbox | TopK SAE on the layer-4 residual of the base model; feature scans; labeling check; pre-registered steering experiment; local demo | see "Phase 6" below |
+
+## Repo map
+
+```
+configs/      one yaml per experiment (30M base, 85M stub, debug CPU)
+tokenizer/    BPE trainer and tokenizer         data/       shard preparation (resumable)
+model/        GPT, attention, blocks (hooks)    train/      pretrain, SFT, DPO, pairs, evaluation, checkpoints
+inference/    KV cache, generation engine (inject hook), quantization, server
+bench/        speed, quantization check, win rate
+interp/       SAE, activation extraction, SAE training and evaluation, feature scan
+analysis/     Phase 6 experiments: A5 transfer, feature scan, labeling and blind check, steering, notebook generators and checkers
+demo/         local steering demo (Starlette + one HTML page)
+notebooks/    Kaggle notebooks (pretrain, SFT, DPO, bench, SAE probe and full run, steering)
+tests/        176 tests         docs/       decisions log, results, pre-registration, benchmark write-ups
+```
+Checkpoints (`*.pt`) are not in git. The SAE, base and SFT weights are pinned by SHA-256 in the scripts and docs.
+
+## Setup and tests (Windows, Python 3.13)
+
+```powershell
+py -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+python -m pytest tests/ -q          # 176 tests; a few skip when checkpoints are absent
+python -c "from common.config import load_config; print(load_config('configs/debug_cpu.yaml')['model'])"
+```
+`make install` / `make test` work too if `make` is installed (Git Bash / WSL).
+
+## Run it
+
+```powershell
+python -m inference.server --weights checkpoints/glassbox-sft-final/sft_final_best.pt   # HTTP server, loopback only (docs/server.md)
+python -m demo.app                                                                      # steering demo at http://127.0.0.1:8000
+python -m train.eval_quality --help                                                     # DPO / SFT generation evaluation
+python analysis/a5_transfer.py --help                       # SAE transfer to the SFT model (CPU, about 3 h for both models)
+python analysis/scan_features.py --help                     # feature scan (CPU, about 1 h per 10M tokens)
+python analysis/steering.py gen --help                      # steering cells (GPU advised: about 3.2 h on a T4)
+python analysis/steering.py analyze --out_dir <dir>         # pre-registered steering verdict
+```
 
 ## Phase 6: what the brain scanner found
 
-- **The SAE is a good compressor of layer 4**: it explains about 86% of the variance and keeping its reconstruction
-  costs little next-token accuracy. It transfers to the SFT model almost unchanged.
-- **Most of its features are about words and phrases, not ideas.** Of 4096 features, only 509 pass a mechanical "not a single
-  token / not punctuation" check, and few of those are concepts. The ones that are (clothing, the night sky, furniture) are real.
-- **Steering works for some concepts.** Adding a feature's direction raised the rate of concept words from about 1% to 20-90% for
-  night sky and clothing, while a random direction of the same size and the opposite sign did nothing. But the rule that the
-  text must stay fluent was met at some strength for only 2 of the 5 pre-chosen features, so the pre-registered claim
-  ("at least 3 of 5") is **not established**.
-- **Caveats that matter:** "concept rate" counts whole words, so high strengths that produce word-salad can still score as a
-  success on that metric (the fluency rule is there to catch it); the labeler and the label-checker are the same model; the five
-  features were chosen by a fixed seeded walk, with my judgment on which labels name a concept; the base model was not steered.
-- Full write-ups: `docs/steering_features.md` (features, tables, controls), `docs/decisions.md` (each phase, with provenance), raw
-  verdicts `docs/phase6_steering_verdict.json`.
+- **The SAE is a good compressor of layer 4**: it explains about 86% of the variance, and keeping its reconstruction costs little
+  next-token accuracy (CE recovered 0.983). It transfers to the SFT model almost unchanged (A5 passed).
+- **Most of its features are about words and phrases, not ideas.** Of 4096 features, only 509 pass a mechanical "not a single token / not
+  punctuation" check, and few of those are concepts. The ones that are (clothing, the night sky, furniture) are real.
+- **Steering works for some concepts.** Adding a feature's direction raised the rate of concept words from about 1% to 20-90% for night sky and
+  clothing, while a random direction of the same size and the opposite sign did nothing. But the text had to stay fluent (end-of-story rate,
+  variety, perplexity), and that held at some strength for only 2 of the 5 pre-chosen features, so the pre-registered claim ("at least 3 of 5")
+  is **not established**.
+
+| Feature | Concept | Result | Why |
+|---|---|---|---|
+| 3651 | household furniture | passes at strength 4 | gain +0.15 over a random control, fluent |
+| 1131 | night sky | passes at strength 2 | gain +0.21, fluent |
+| 1672 | clothing | fails | gain +0.66 already at strength 1, but text variety drops 0.054 (limit 0.05) and breaks further up |
+| 1319 | foods and animals | fails | gain +0.076 at strength 4 (needs 0.10), and fluency fails there |
+| 3990 | an animal as subject | fails | no effect |
+
+- **Steps in order:** SAE training and acceptance (A1-A4) -> transfer to the SFT model (A5) -> scan 10M train tokens and 4M validation tokens ->
+  label 60 random features and check them blind -> pick 5 concept features by a fixed seeded rule (`docs/steering_features.md`) -> steering run
+  on a T4 (4550 generation cells, 3.24 GPU hours) -> verdict.
+- **Caveats that matter:** "concept rate" counts whole words, so strengths that produce word-salad can still score on that metric (the
+  fluency rule is there to catch it); the labeler and the label-checker are the same model; the five features were chosen by a fixed seeded walk with
+  my judgment on which labels name a concept; only the SFT model was steered.
+- Full write-ups: `docs/steering_features.md` (features, tables, controls), `docs/decisions.md` (each phase, with provenance), raw verdicts in
+  `docs/phase6_steering_verdict.json`.
 
 ## Demo (local, CPU)
 
 ```powershell
 python -m demo.app          # http://127.0.0.1:8000
 ```
-A page with a strength slider for the two steering features that passed the pre-registered test (night sky, household furniture).
-It writes the same story twice with the same seed, unsteered and steered, and marks the concept words. A note at the top says the
-other three features (clothing, foods and animals, an animal as subject) did not show a usable effect and are not offered, and
-that the overall claim is "not established". Beyond the tested strength the page warns that text degrades.
+A page with a strength slider for the two steering features that passed (night sky, household furniture). It writes the same story twice with
+the same seed, unsteered and steered, and marks the concept words. A note at the top says the other three features (clothing, foods and animals,
+an animal as a subject) did not show a usable effect and are not offered, and that the overall claim is "not established". Beyond the tested
+strength the page warns that text degrades. Tested through its API and on the real model; the page layout itself has not been checked in a browser.
 
-## Reproduce the Phase 6 pieces
+## Documentation index
 
-```powershell
-python -m pytest tests/ -q                                  # 171 tests
-python analysis/a5_transfer.py --help                       # SAE transfer to the SFT model (CPU, about 3 h for both models)
-python analysis/scan_features.py --help                     # feature scan (CPU, about 1 h per 10M tokens)
-python analysis/steering.py gen --help                      # steering cells (GPU strongly advised: about 3 h on a T4)
-python analysis/steering.py analyze --out_dir <dir>         # pre-registered verdict
-```
-Checkpoints are not in git (`.pt` files): the SAE, base and SFT weights are pinned by SHA-256 in the scripts and docs.
+| File | Content |
+|---|---|
+| `docs/decisions.md` | Log of every phase: decisions, bugs found, what was measured (the most complete record) |
+| `docs/phase6_preregistration.md` | The Phase 6 rules and thresholds, written before the runs, plus the measured layer-4 result |
+| `docs/steering_features.md` | Feature-selection rules, the five chosen features, steering results and controls |
+| `docs/results_final.md`, `docs/results_folded.md`, `docs/results_corrected_sampler.md` | DPO evaluation, apostrophe re-scoring, corrected-sampler re-evaluation |
+| `docs/benchmark_*.md`, `docs/quantization_results.md`, `docs/server.md` | Inference benchmarks, int8 / fp16 check, server notes |
+| `docs/phase6_*.json`, `docs/phase6_labeling/` | Raw A5 report, steering verdict, label sample and scores |
 
----
+## Not done / open items
 
-# Setup and older notes (Phases 0-5)
-Repo root is this folder (`Portfolio Project/` acts as `minigpt-stack/` from the spec).
-
-## Setup (Windows, Python 3.13, i3 + 8GB RAM)
-
-```powershell
-py -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-```
-
-If `make` is not installed (common on Windows), use the direct commands:
-```powershell
-pip install -r requirements.txt
-python -m pytest tests/ -v
-```
-
-With `make` (Git Bash / WSL):
-```
-make install
-make test
-```
-
-## Quickstart
-```powershell
-python -m pytest tests/ -v
-python -c "from common.config import load_config; print(load_config('configs/debug_cpu.yaml')['model'])"
-```
-
-## Structure
-```
-configs/        # one yaml per experiment (30M, 85M stub, debug CPU)
-common/         # shared config loader (small deviation from spec, see docs/decisions.md)
-tokenizer/ model/ data/ train/ inference/ interp/ demo/ bench/
-tests/ docs/ notebooks/
-```
-
-## Checkpoints / save states
-Every training config already carries a `checkpoint:` block (`dir`, `save_every`, `keep_last_n`).
-`train/checkpoint.py` (Phase 3) will save model + optimizer + GradScaler + scheduler + RNG state + data position,
-so a dead Kaggle session resumes with a continuous loss curve. See `docs/decisions.md`.
+- **Spot-check ratings** (30 random SAE labels, `checkpoints/glassbox-sae-l4/labeling/spotcheck30.md`) and the **DPO human evaluation**
+  (`docs/human_spotcheck.md`) are unrated; they are for a human to fill in.
+- **The DPO preference pairs were built with the old sampler** (see Limitations). Rebuilding them and retraining DPO needs a GPU (roughly 1-2 hours,
+  unmeasured); the generation metrics themselves were re-evaluated with the corrected sampler.
+- **Not started:** the `max_new=384` re-run, the mojibake retraining decision, CUDA graphs / `torch.compile`, SAEs at layers 2 and 6, steering the base
+  model, and finer steering strengths for clothing (not pre-registered).
+- No 60-second video (dropped by choice).
 
 ## Limitations
 
@@ -171,9 +205,11 @@ The DPO final runs use `lr = 5e-6`. It was chosen for **stability**, not as a pr
 ## DPO result
 
 DPO raises keyword coverage (+0.8 of 3, 95% CIs exclude zero, both training
-seeds agree) and lowers `eot_rate` by 12-15 points, below the 85% guardrail.
-It is not an overall win. Details, finished-only coverage and length
-distributions: `docs/results_final.md`.
+seeds agree) and lowers `eot_rate` by 12-15 points (published numbers, old
+sampler), below the 85% guardrail. Re-evaluated with the corrected sampler
+(`docs/results_corrected_sampler.md`): coverage +0.79 / +0.90 and `eot_rate`
+-15.8 / -13.8 points, ending at 76% / 78%. It is not an overall win. Details,
+finished-only coverage and length distributions: `docs/results_final.md`.
 
 ## Inference (Phase 5): what was measured
 
