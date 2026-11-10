@@ -41,3 +41,16 @@ Notes:
   committed. Do not open it until the spot-check is fully rated.
 - The finished-only comparison is descriptive, not paired: each model's
   finished subset differs, so it is not a same-story comparison.
+
+## Phase 6 scripts (also in this folder)
+
+| Script | Purpose |
+|---|---|
+| `a5_transfer.py` | A5: the base-trained SAE on the SFT (and base) model, plain and template inputs; resumable per cell |
+| `scan_features.py`, `label_prep.py`, `blind_check.py`, `steering_candidates.py` | feature scans (train and validation), labeling cards, blind label check, the mechanical eligibility checks and seeded order for steering features |
+| `steering.py` | the pre-registered steering experiment (`gen` then `analyze`) |
+| `reeval_compare.py` | DPO re-evaluation with the corrected sampler vs the published numbers |
+| `gen_steering_nb.py`, `check_*_notebook.py` | generate the steering notebook; run notebooks in a local kernel as a pre-flight check |
+| `phase6_smoke.py` | Phase 6 code smoke runs (not evaluations) |
+
+Run them from the repository root (they add the current directory to `sys.path`).

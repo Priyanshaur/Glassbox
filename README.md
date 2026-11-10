@@ -5,7 +5,7 @@ A 31.5M-parameter GPT trained from scratch on TinyStories (own BPE tokenizer, ow
 autoencoder (SAE)** on one layer's activations ("Glassbox"): can individual SAE features be read as concepts, and can they be used to
 steer the model's stories? Heavy training ran on free Kaggle T4 GPUs; everything else ran on an i3 / 8 GB Windows laptop (CPU).
 
-**Status: complete for the agreed scope.** All code, experiments and write-ups are in this repo (176 tests pass). Open items are listed at
+**Status: complete for the agreed scope.** All code, experiments and write-ups are in this repo (176 tests pass with the local data and checkpoints; see Setup for a fresh clone). Open items are listed at
 the end. The results are mixed, and this README says where they are weak.
 
 ## Results at a glance
@@ -47,7 +47,7 @@ interp/       SAE, activation extraction, SAE training and evaluation, feature s
 analysis/     Phase 6 experiments: A5 transfer, feature scan, labeling and blind check, steering, notebook generators and checkers
 demo/         local steering demo (Starlette + one HTML page)
 notebooks/    Kaggle notebooks (pretrain, SFT, DPO, bench, SAE probe and full run, steering)
-tests/        176 tests         docs/       decisions log, results, pre-registration, benchmark write-ups
+tests/        176 tests (see Setup)  docs/       decisions log, results, pre-registration, benchmark write-ups
 ```
 Checkpoints (`*.pt`) are not in git. The SAE, base and SFT weights are pinned by SHA-256 in the scripts and docs.
 
@@ -57,10 +57,31 @@ Checkpoints (`*.pt`) are not in git. The SAE, base and SFT weights are pinned by
 py -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-python -m pytest tests/ -q          # 176 tests; a few skip when checkpoints are absent
-python -c "from common.config import load_config; print(load_config('configs/debug_cpu.yaml')['model'])"
+python -m data.prepare --out_dir data --max_docs 1000       # small debug shards (needs network, about 1 min); the tests need them
+python -m pytest tests/ -q
 ```
-`make install` / `make test` work too if `make` is installed (Git Bash / WSL).
+- **On a fresh clone the suite needs `data.prepare` first.** Without the shards 28 tests fail with `FileNotFoundError: data\meta.json`;
+  with them, 170 pass and 6 skip (the skips need the real SFT checkpoint, which is not in git). With all local data and checkpoints present, all 176 pass.
+- The tests were developed with torch 2.9 (CPU); a fresh install picks the newest torch (2.15 passed the same suite).
+- `make install` / `make test` work too if `make` is installed (Git Bash / WSL).
+
+### Smallest end-to-end path (CPU, a few minutes; every command below was run on a fresh clone)
+
+```powershell
+python -m tokenizer.train_tokenizer --corpus_mb 1 --vocab_size 512 --out tok512.json     # tokenizer demo (the real one is tokenizer/tok8192.json)
+python -m train.pretrain --config configs/debug_cpu.yaml --resume none --max_steps 20 --ckpt_dir out/ckpt   # loss falls from 9.0
+python -c "import torch; from common.config import load_config; from model.gpt import GPT; from tokenizer.bpe import BPETokenizer; from inference.generate import Generator; c=load_config('configs/debug_cpu.yaml'); m=GPT(c['model']); m.load_state_dict(torch.load('out/ckpt/weights_step20.pt', weights_only=True)); m.eval(); print(Generator(m, BPETokenizer.load(c['data']['tokenizer_path'])).generate('Once upon a time', n=1, max_new=24, stop_at_eot=False).texts)"
+python -m interp.train_sae --config configs/debug_cpu.yaml --weights out/ckpt/weights_step20.pt --out_dir out/sae --layer 1 --n_features 128 --k 4 --batch_tokens 256 --buffer_tokens 1024 --epochs 3 --ctx 64 --norm_windows 8 --eval_windows 8 --warmup_steps 2
+```
+A 20-step model writes word salad and the debug-scale SAE is meaningless (FVU about 0.75); this path only shows the code runs end to end.
+The real results need the full data, the Kaggle runs and the checkpoints described below.
+
+### Checkpoints are not published
+
+`*.pt` files are not in git and are not hosted anywhere public. The server, the demo and the Phase 6 scripts need them
+(`checkpoints/glassbox-sft-final/sft_final_best.pt`, `checkpoints/glassbox-s3-final/weights_step12158.pt`,
+`checkpoints/glassbox-sae-l4/sae_latest.pt`) and stop with a `FileNotFoundError` without them. They are pinned by SHA-256 in the scripts and docs, so a
+regenerated copy can be checked. Everything that does not need them (tests, the debug path above, reading the result files in `docs/`) works from a clone.
 
 ## Run it
 
@@ -125,7 +146,7 @@ strength the page warns that text degrades. Tested through its API and on the re
 
 ## Not done / open items
 
-- **Spot-check ratings** (30 random SAE labels, `checkpoints/glassbox-sae-l4/labeling/spotcheck30.md`) and the **DPO human evaluation**
+- **Spot-check ratings** (30 random SAE labels, `docs/phase6_labeling/spotcheck30.md`) and the **DPO human evaluation**
   (`docs/human_spotcheck.md`) are unrated; they are for a human to fill in.
 - **The DPO preference pairs were built with the old sampler** (see Limitations). Rebuilding them and retraining DPO needs a GPU (roughly 1-2 hours,
   unmeasured); the generation metrics themselves were re-evaluated with the corrected sampler.

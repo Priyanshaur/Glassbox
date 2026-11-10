@@ -1,7 +1,7 @@
 # Design log. Every choice + reason. Update each phase; include failures honestly.
 
 ## Phase 0 (2026-10-11)
-- Repo root = `Portfolio Project/` (acts as `minigpt-stack/`). Reason: avoid empty nested folder; keep Kaggle clone path simple.
+- Repo root = `Portfolio Project/` (acts as `minigpt-stack/`; on GitHub the repo is `Glassbox`, same layout). Reason: avoid empty nested folder; keep Kaggle clone path simple.
 - Added `common/config.py` (deviation from spec tree). Reason: loader is shared by train/inference/interp; duplicating it per folder would diverge.
 - Python 3.13 (laptop has 3.13.2, not 3.11). Reason: pin to reality; same `requirements.txt` installs CUDA torch on Kaggle.
 - torch 2.x pinned (2.5.1). Reason: need `scaled_dot_product_attention`; T4-safe fp16 path.
